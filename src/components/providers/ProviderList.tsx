@@ -521,27 +521,25 @@ export function ProviderList({
         strategy={verticalListSortingStrategy}
       >
         <div className="space-y-3">
-          {isGroupedByUrl && groupedProviders ? (
-            groupedProviders.map((group) => {
-              if (group.providers.length >= 2) {
-                return (
-                  <ProviderFolderCard
-                    key={group.groupKey}
-                    url={group.displayUrl}
-                    count={group.providers.length}
-                    containsCurrent={group.containsCurrent}
-                  >
-                    <div className="space-y-3">
-                      {group.providers.map(renderProviderCardItem)}
-                    </div>
-                  </ProviderFolderCard>
-                );
-              }
-              return renderProviderCardItem(group.providers[0]);
-            })
-          ) : (
-            filteredProviders.map(renderProviderCardItem)
-          )}
+          {isGroupedByUrl && groupedProviders
+            ? groupedProviders.map((group) => {
+                if (group.providers.length >= 2) {
+                  return (
+                    <ProviderFolderCard
+                      key={group.groupKey}
+                      url={group.displayUrl}
+                      count={group.providers.length}
+                      containsCurrent={group.containsCurrent}
+                    >
+                      <div className="space-y-3">
+                        {group.providers.map(renderProviderCardItem)}
+                      </div>
+                    </ProviderFolderCard>
+                  );
+                }
+                return renderProviderCardItem(group.providers[0]);
+              })
+            : filteredProviders.map(renderProviderCardItem)}
         </div>
       </SortableContext>
     </DndContext>
@@ -559,7 +557,9 @@ export function ProviderList({
           title={t("provider.groupByUrl", { defaultValue: "按请求地址归类" })}
         >
           <Folder className="w-3.5 h-3.5 text-muted-foreground" />
-          <span>{t("provider.groupByUrl", { defaultValue: "按请求地址归类" })}</span>
+          <span>
+            {t("provider.groupByUrl", { defaultValue: "按请求地址归类" })}
+          </span>
         </Button>
       </div>
 
