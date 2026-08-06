@@ -33,6 +33,16 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Prepare Windows Build Config
+        shell: pwsh
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          if (-not $env:TAURI_SIGNING_PRIVATE_KEY) {
+            Write-Host "TAURI_SIGNING_PRIVATE_KEY not set, clearing pubkey in tauri.conf.json for unsigned build..."
+            node -e 'const fs = require("fs"), p = "src-tauri/tauri.conf.json", c = JSON.parse(fs.readFileSync(p, "utf8")); if (c.plugins && c.plugins.updater) { c.plugins.updater.pubkey = ""; } fs.writeFileSync(p, JSON.stringify(c, null, 2));'
+          }
+
       - name: Build Tauri App (Windows)
         shell: pwsh
         run: |

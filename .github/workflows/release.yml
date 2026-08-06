@@ -127,7 +127,8 @@ jobs:
         run: |
           # 调试：检查 Secret 是否存在
           if [ -z "${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}" ]; then
-            echo "⚠️ TAURI_SIGNING_PRIVATE_KEY Secret 未配置，跳过私钥签名阶段（构建无签名的安装包）"
+            echo "⚠️ TAURI_SIGNING_PRIVATE_KEY Secret 未配置，自动置空 tauri.conf.json 中的 pubkey 以生成无签名包"
+            node -e 'const fs = require("fs"), p = "src-tauri/tauri.conf.json", c = JSON.parse(fs.readFileSync(p, "utf8")); if (c.plugins && c.plugins.updater) { c.plugins.updater.pubkey = ""; } fs.writeFileSync(p, JSON.stringify(c, null, 2));'
             exit 0
           fi
           
