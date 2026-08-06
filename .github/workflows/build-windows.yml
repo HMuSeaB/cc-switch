@@ -1,0 +1,74 @@
+name: Build Windows Release
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    name: Build Windows (x86_64)
+    runs-on: windows-2022
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build Tauri App (Windows)
+        shell: pwsh
+        run: |
+          pnpm tauri build
+
+      - name: Prepare Windows Assets
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path release-assets
+          $version = if ($env:GITHUB_REF_NAME) { $env:GITHUB_REF_NAME } else { "latest" }
+
+          $msi = Get-ChildItem -Path "src-tauri/target/release/bundle/msi" -Filter "*.msi" -Recurse | Select-Object -First 1
+          if ($msi) {
+            Copy-Item $msi.FullName -Destination "release-assets/CC-Switch-$version-Windows.msi"
+            Write-Host "MSI copied: CC-Switch-$version-Windows.msi"
+          }
+
+          $exe = Get-ChildItem -Path "src-tauri/target/release" -Filter "cc-switch.exe" | Select-Object -First 1
+          if ($exe) {
+            Compress-Archive -Path $exe.FullName -DestinationPath "release-assets/CC-Switch-$version-Windows-Portable.zip" -Force
+            Write-Host "Portable zip created: CC-Switch-$version-Windows-Portable.zip"
+          }
+
+      - name: Upload Artifacts to Workflow
+        uses: actions/upload-artifact@v4
+        with:
+          name: CC-Switch-Windows-Release
+          path: release-assets/*
+
+      - name: Publish GitHub Release (if tag pushed)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: CC Switch ${{ github.ref_name }} (Windows)
+          prerelease: true
+          files: release-assets/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
