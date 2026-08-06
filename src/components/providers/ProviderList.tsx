@@ -13,7 +13,7 @@ import {
   type CSSProperties,
 } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { AlertTriangle, Search, X } from "lucide-react";
+import { AlertTriangle, Folder, Search, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -21,6 +21,10 @@ import type { Provider } from "@/types";
 import type { AppId } from "@/lib/api";
 import { providersApi } from "@/lib/api/providers";
 import { extractErrorMessage } from "@/utils/errorUtils";
+import {
+  getProviderApiUrl,
+  getProviderGroupKey,
+} from "@/utils/providerUrlUtils";
 import { useDragSort } from "@/hooks/useDragSort";
 import {
   useOpenClawLiveProviderIds,
@@ -33,6 +37,7 @@ import {
 import { useStreamCheck } from "@/hooks/useStreamCheck";
 import { ProviderCard } from "@/components/providers/ProviderCard";
 import { ProviderEmptyState } from "@/components/providers/ProviderEmptyState";
+import { ProviderFolderCard } from "@/components/providers/ProviderFolderCard";
 import {
   useAutoFailoverEnabled,
   useFailoverQueue,
@@ -191,6 +196,18 @@ export function ProviderList({
 
   const [searchTerm, setSearchTerm] = useState("");
   const [isSearchOpen, setIsSearchOpen] = useState(false);
+  const [isGroupedByUrl, setIsGroupedByUrl] = useState(() => {
+    return localStorage.getItem("cc-switch:group-by-url") === "true";
+  });
+
+  const handleToggleGroupByUrl = useCallback(() => {
+    setIsGroupedByUrl((prev) => {
+      const next = !prev;
+      localStorage.setItem("cc-switch:group-by-url", String(next));
+      return next;
+    });
+  }, []);
+
   const searchInputRef = useRef<HTMLInputElement>(null);
   const { data: claudeDesktopStatus } = useQuery({
     queryKey: ["claudeDesktopStatus"],
@@ -294,6 +311,66 @@ export function ProviderList({
     });
   }, [searchTerm, sortedProviders]);
 
+  const groupedProviders = useMemo(() => {
+    if (!isGroupedByUrl) return null;
+
+    const unconfiguredText = t("provider.unconfiguredUrlGroup", {
+      defaultValue: "未配置地址",
+    });
+
+    const groups: Array<{
+      groupKey: string;
+      displayUrl: string;
+      providers: Provider[];
+      containsCurrent: boolean;
+    }> = [];
+
+    const map = new Map<
+      string,
+      { displayUrl: string; providers: Provider[]; containsCurrent: boolean }
+    >();
+
+    for (const provider of filteredProviders) {
+      const groupKey = getProviderGroupKey(provider, "unconfigured");
+      const displayUrl = getProviderApiUrl(provider, unconfiguredText);
+      const isOmo = provider.category === "omo";
+      const isOmoSlim = provider.category === "omo-slim";
+      const isCurrent = isOmo
+        ? provider.id === (currentOmoId || "")
+        : isOmoSlim
+          ? provider.id === (currentOmoSlimId || "")
+          : appId === "hermes"
+            ? hermesCurrentProviderId === provider.id
+            : provider.id === currentProviderId;
+
+      let group = map.get(groupKey);
+      if (!group) {
+        group = {
+          displayUrl,
+          providers: [],
+          containsCurrent: false,
+        };
+        map.set(groupKey, group);
+        groups.push({ groupKey, ...group });
+      }
+      group.providers.push(provider);
+      if (isCurrent) {
+        group.containsCurrent = true;
+      }
+    }
+
+    return groups;
+  }, [
+    filteredProviders,
+    isGroupedByUrl,
+    currentOmoId,
+    currentOmoSlimId,
+    appId,
+    hermesCurrentProviderId,
+    currentProviderId,
+    t,
+  ]);
+
   const claudeDesktopStatusMessages = useMemo(() => {
     if (appId !== "claude-desktop" || !claudeDesktopStatus) return [];
 
@@ -374,6 +451,65 @@ export function ProviderList({
     );
   }
 
+  const renderProviderCardItem = (provider: Provider) => {
+    const isOmo = provider.category === "omo";
+    const isOmoSlim = provider.category === "omo-slim";
+    const isOmoCurrent = isOmo && provider.id === (currentOmoId || "");
+    const isOmoSlimCurrent =
+      isOmoSlim && provider.id === (currentOmoSlimId || "");
+    const isHermesCurrent =
+      appId === "hermes" && hermesCurrentProviderId === provider.id;
+
+    return (
+      <SortableProviderCard
+        key={provider.id}
+        provider={provider}
+        isCurrent={
+          isOmo
+            ? isOmoCurrent
+            : isOmoSlim
+              ? isOmoSlimCurrent
+              : appId === "hermes"
+                ? isHermesCurrent
+                : provider.id === currentProviderId
+        }
+        appId={appId}
+        isInConfig={isProviderInConfig(provider.id)}
+        isOmo={isOmo}
+        isOmoSlim={isOmoSlim}
+        onSwitch={onSwitch}
+        onEdit={onEdit}
+        onDelete={onDelete}
+        onRemoveFromConfig={onRemoveFromConfig}
+        onDisableOmo={onDisableOmo}
+        onDisableOmoSlim={onDisableOmoSlim}
+        onDuplicate={onDuplicate}
+        onConfigureUsage={onConfigureUsage}
+        onOpenWebsite={onOpenWebsite}
+        onOpenTerminal={onOpenTerminal}
+        onTest={handleTest}
+        isTesting={isChecking(provider.id)}
+        isProxyRunning={isProxyRunning}
+        isProxyTakeover={isProxyTakeover}
+        isAutoFailoverEnabled={isFailoverModeActive}
+        failoverPriority={getFailoverPriority(provider.id)}
+        isInFailoverQueue={isInFailoverQueue(provider.id)}
+        onToggleFailover={(enabled) =>
+          handleToggleFailover(provider.id, enabled)
+        }
+        activeProviderId={activeProviderId}
+        isDefaultModel={
+          appId === "hermes"
+            ? isHermesCurrent
+            : isProviderDefaultModel(provider.id)
+        }
+        onSetAsDefault={
+          onSetAsDefault ? () => onSetAsDefault(provider) : undefined
+        }
+      />
+    );
+  };
+
   const renderProviderList = () => (
     <DndContext
       sensors={sensors}
@@ -385,64 +521,27 @@ export function ProviderList({
         strategy={verticalListSortingStrategy}
       >
         <div className="space-y-3">
-          {filteredProviders.map((provider) => {
-            const isOmo = provider.category === "omo";
-            const isOmoSlim = provider.category === "omo-slim";
-            const isOmoCurrent = isOmo && provider.id === (currentOmoId || "");
-            const isOmoSlimCurrent =
-              isOmoSlim && provider.id === (currentOmoSlimId || "");
-            const isHermesCurrent =
-              appId === "hermes" && hermesCurrentProviderId === provider.id;
-            return (
-              <SortableProviderCard
-                key={provider.id}
-                provider={provider}
-                isCurrent={
-                  isOmo
-                    ? isOmoCurrent
-                    : isOmoSlim
-                      ? isOmoSlimCurrent
-                      : appId === "hermes"
-                        ? isHermesCurrent
-                        : provider.id === currentProviderId
-                }
-                appId={appId}
-                isInConfig={isProviderInConfig(provider.id)}
-                isOmo={isOmo}
-                isOmoSlim={isOmoSlim}
-                onSwitch={onSwitch}
-                onEdit={onEdit}
-                onDelete={onDelete}
-                onRemoveFromConfig={onRemoveFromConfig}
-                onDisableOmo={onDisableOmo}
-                onDisableOmoSlim={onDisableOmoSlim}
-                onDuplicate={onDuplicate}
-                onConfigureUsage={onConfigureUsage}
-                onOpenWebsite={onOpenWebsite}
-                onOpenTerminal={onOpenTerminal}
-                onTest={handleTest}
-                isTesting={isChecking(provider.id)}
-                isProxyRunning={isProxyRunning}
-                isProxyTakeover={isProxyTakeover}
-                isAutoFailoverEnabled={isFailoverModeActive}
-                failoverPriority={getFailoverPriority(provider.id)}
-                isInFailoverQueue={isInFailoverQueue(provider.id)}
-                onToggleFailover={(enabled) =>
-                  handleToggleFailover(provider.id, enabled)
-                }
-                activeProviderId={activeProviderId}
-                // OpenClaw: default model / Hermes: model.provider === provider.id
-                isDefaultModel={
-                  appId === "hermes"
-                    ? isHermesCurrent
-                    : isProviderDefaultModel(provider.id)
-                }
-                onSetAsDefault={
-                  onSetAsDefault ? () => onSetAsDefault(provider) : undefined
-                }
-              />
-            );
-          })}
+          {isGroupedByUrl && groupedProviders ? (
+            groupedProviders.map((group) => {
+              if (group.providers.length >= 2) {
+                return (
+                  <ProviderFolderCard
+                    key={group.groupKey}
+                    url={group.displayUrl}
+                    count={group.providers.length}
+                    containsCurrent={group.containsCurrent}
+                  >
+                    <div className="space-y-3">
+                      {group.providers.map(renderProviderCardItem)}
+                    </div>
+                  </ProviderFolderCard>
+                );
+              }
+              return renderProviderCardItem(group.providers[0]);
+            })
+          ) : (
+            filteredProviders.map(renderProviderCardItem)
+          )}
         </div>
       </SortableContext>
     </DndContext>
@@ -450,6 +549,20 @@ export function ProviderList({
 
   return (
     <div className="mt-4 space-y-4">
+      {/* 顶栏控制区域：切换请求地址归类等 */}
+      <div className="flex items-center justify-end px-1">
+        <Button
+          variant={isGroupedByUrl ? "secondary" : "ghost"}
+          size="sm"
+          onClick={handleToggleGroupByUrl}
+          className="h-8 gap-1.5 text-xs font-normal border border-transparent transition-all"
+          title={t("provider.groupByUrl", { defaultValue: "按请求地址归类" })}
+        >
+          <Folder className="w-3.5 h-3.5 text-muted-foreground" />
+          <span>{t("provider.groupByUrl", { defaultValue: "按请求地址归类" })}</span>
+        </Button>
+      </div>
+
       {claudeDesktopStatusMessages.length > 0 && (
         <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-900 dark:text-amber-200">
           <div className="flex items-center gap-2 font-medium">
