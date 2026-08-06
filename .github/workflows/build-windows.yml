@@ -38,9 +38,9 @@ jobs:
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
         run: |
-          if (-not $env:TAURI_SIGNING_PRIVATE_KEY) {
-            Write-Host "TAURI_SIGNING_PRIVATE_KEY not set, clearing pubkey in tauri.conf.json for unsigned build..."
-            node -e 'const fs = require("fs"), p = "src-tauri/tauri.conf.json", c = JSON.parse(fs.readFileSync(p, "utf8")); if (c.plugins && c.plugins.updater) { c.plugins.updater.pubkey = ""; } fs.writeFileSync(p, JSON.stringify(c, null, 2));'
+          if ([string]::IsNullOrWhiteSpace($env:TAURI_SIGNING_PRIVATE_KEY)) {
+            Write-Host "TAURI_SIGNING_PRIVATE_KEY not set, disabling updater artifacts and clearing pubkey in tauri.conf.json for unsigned build..."
+            node -e 'const fs = require("fs"), p = "src-tauri/tauri.conf.json", c = JSON.parse(fs.readFileSync(p, "utf8")); if (c.plugins && c.plugins.updater) { c.plugins.updater.pubkey = ""; } if (c.bundle) { c.bundle.createUpdaterArtifacts = false; } fs.writeFileSync(p, JSON.stringify(c, null, 2));'
           }
 
       - name: Build Tauri App (Windows)
@@ -54,10 +54,16 @@ jobs:
           New-Item -ItemType Directory -Force -Path release-assets
           $version = if ($env:GITHUB_REF_NAME) { $env:GITHUB_REF_NAME } else { "latest" }
 
-          $msi = Get-ChildItem -Path "src-tauri/target/release/bundle/msi" -Filter "*.msi" -Recurse | Select-Object -First 1
+          $msi = Get-ChildItem -Path "src-tauri/target" -Filter "*.msi" -Recurse | Select-Object -First 1
           if ($msi) {
             Copy-Item $msi.FullName -Destination "release-assets/CC-Switch-$version-Windows.msi"
             Write-Host "MSI copied: CC-Switch-$version-Windows.msi"
+          }
+
+          $nsisExe = Get-ChildItem -Path "src-tauri/target" -Filter "*setup.exe" -Recurse | Select-Object -First 1
+          if ($nsisExe) {
+            Copy-Item $nsisExe.FullName -Destination "release-assets/CC-Switch-$version-Windows-Setup.exe"
+            Write-Host "NSIS Setup exe copied: CC-Switch-$version-Windows-Setup.exe"
           }
 
           $exe = Get-ChildItem -Path "src-tauri/target/release" -Filter "cc-switch.exe" | Select-Object -First 1
