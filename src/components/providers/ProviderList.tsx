@@ -5,7 +5,7 @@ import {
   useSortable,
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
-import {
+import React, {
   useEffect,
   useMemo,
   useRef,
