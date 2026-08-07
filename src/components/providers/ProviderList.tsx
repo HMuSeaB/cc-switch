@@ -13,7 +13,17 @@ import {
   type CSSProperties,
 } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { AlertTriangle, Folder, Search, X } from "lucide-react";
+import {
+  AlertTriangle,
+  ArrowUpDown,
+  Check,
+  ChevronsDownUp,
+  ChevronsUpDown,
+  Folder,
+  Save,
+  Search,
+  X,
+} from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -38,6 +48,12 @@ import { useStreamCheck } from "@/hooks/useStreamCheck";
 import { ProviderCard } from "@/components/providers/ProviderCard";
 import { ProviderEmptyState } from "@/components/providers/ProviderEmptyState";
 import { ProviderFolderCard } from "@/components/providers/ProviderFolderCard";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import {
   useAutoFailoverEnabled,
   useFailoverQueue,
@@ -194,11 +210,20 @@ export function ProviderList({
     [appId, addToQueue, removeFromQueue],
   );
 
+  type SortOption =
+    "custom" | "name-asc" | "name-desc" | "url-asc" | "time-desc" | "time-asc";
+
   const [searchTerm, setSearchTerm] = useState("");
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [isGroupedByUrl, setIsGroupedByUrl] = useState(() => {
     return localStorage.getItem("cc-switch:group-by-url") === "true";
   });
+  const [sortBy, setSortBy] = useState<SortOption>(() => {
+    return (
+      (localStorage.getItem("cc-switch:sort-by") as SortOption) || "custom"
+    );
+  });
+  const [forceExpand, setForceExpand] = useState<boolean | null>(null);
 
   const handleToggleGroupByUrl = useCallback(() => {
     setIsGroupedByUrl((prev) => {
@@ -206,6 +231,11 @@ export function ProviderList({
       localStorage.setItem("cc-switch:group-by-url", String(next));
       return next;
     });
+  }, []);
+
+  const handleSetSortBy = useCallback((option: SortOption) => {
+    setSortBy(option);
+    localStorage.setItem("cc-switch:sort-by", option);
   }, []);
 
   const searchInputRef = useRef<HTMLInputElement>(null);
@@ -258,11 +288,7 @@ export function ProviderList({
       }
     },
     onError: (error: unknown) => {
-      // Tauri invoke 的 reject 值是后端序列化出的纯字符串而非 Error 对象，
-      // 取 .message 只会得到 undefined（空 toast）。
       toast.error(extractErrorMessage(error) || t("settings.importFailed"));
-      // 导入失败前也可能已产生需要上屏的副作用：GrokBuild 官方登录态下点
-      // 导入，命令层会先补种官方条目、随后才因 live 不可导入而报错。
       queryClient.invalidateQueries({ queryKey: ["providers", appId] });
     },
   });
@@ -273,8 +299,6 @@ export function ProviderList({
 
       const key = event.key.toLowerCase();
       if ((event.metaKey || event.ctrlKey) && key === "f") {
-        // 正在输入框/可编辑区域中时不抢占 Ctrl+F（例如添加供应商表单里
-        // ProviderPresetSelector 的搜索框），避免与其同名快捷键冲突。
         if (isTextEditableTarget(document.activeElement)) return;
         event.preventDefault();
         setIsSearchOpen(true);
@@ -311,6 +335,60 @@ export function ProviderList({
     });
   }, [searchTerm, sortedProviders]);
 
+  const sortedAndFilteredProviders = useMemo(() => {
+    if (sortBy === "custom") return filteredProviders;
+    const copy = [...filteredProviders];
+    const locale = i18n.language === "zh" ? "zh-CN" : "en-US";
+
+    return copy.sort((a, b) => {
+      if (sortBy === "name-asc") {
+        return a.name.localeCompare(b.name, locale);
+      }
+      if (sortBy === "name-desc") {
+        return b.name.localeCompare(a.name, locale);
+      }
+      if (sortBy === "url-asc") {
+        const urlA = getProviderApiUrl(a, "");
+        const urlB = getProviderApiUrl(b, "");
+        return urlA.localeCompare(urlB, locale);
+      }
+      if (sortBy === "time-desc") {
+        return (b.createdAt ?? 0) - (a.createdAt ?? 0);
+      }
+      if (sortBy === "time-asc") {
+        return (a.createdAt ?? 0) - (b.createdAt ?? 0);
+      }
+      return 0;
+    });
+  }, [filteredProviders, sortBy, i18n.language]);
+
+  const handleSaveSortOrder = useCallback(async () => {
+    try {
+      const updates = sortedAndFilteredProviders.map((provider, index) => ({
+        id: provider.id,
+        sortIndex: index,
+      }));
+      await providersApi.updateSortOrder(updates, appId);
+      await queryClient.invalidateQueries({ queryKey: ["providers", appId] });
+      await queryClient.invalidateQueries({
+        queryKey: ["failoverQueue", appId],
+      });
+      try {
+        await providersApi.updateTrayMenu();
+      } catch {
+        // ignore
+      }
+      toast.success(t("provider.sortUpdated", { defaultValue: "排序已保存" }));
+      setSortBy("custom");
+      localStorage.setItem("cc-switch:sort-by", "custom");
+    } catch (error) {
+      toast.error(
+        extractErrorMessage(error) ||
+          t("provider.sortUpdateFailed", { defaultValue: "排序更新失败" }),
+      );
+    }
+  }, [sortedAndFilteredProviders, appId, queryClient, t]);
+
   const groupedProviders = useMemo(() => {
     if (!isGroupedByUrl) return null;
 
@@ -330,7 +408,7 @@ export function ProviderList({
       { displayUrl: string; providers: Provider[]; containsCurrent: boolean }
     >();
 
-    for (const provider of filteredProviders) {
+    for (const provider of sortedAndFilteredProviders) {
       const groupKey = getProviderGroupKey(provider, "unconfigured");
       const displayUrl = getProviderApiUrl(provider, unconfiguredText);
       const isOmo = provider.category === "omo";
@@ -361,7 +439,7 @@ export function ProviderList({
 
     return groups;
   }, [
-    filteredProviders,
+    sortedAndFilteredProviders,
     isGroupedByUrl,
     currentOmoId,
     currentOmoSlimId,
@@ -517,7 +595,7 @@ export function ProviderList({
       onDragEnd={handleDragEnd}
     >
       <SortableContext
-        items={filteredProviders.map((provider) => provider.id)}
+        items={sortedAndFilteredProviders.map((provider) => provider.id)}
         strategy={verticalListSortingStrategy}
       >
         <div className="space-y-3">
@@ -530,6 +608,7 @@ export function ProviderList({
                       url={group.displayUrl}
                       count={group.providers.length}
                       containsCurrent={group.containsCurrent}
+                      forceExpand={forceExpand}
                     >
                       <div className="space-y-3">
                         {group.providers.map(renderProviderCardItem)}
@@ -539,7 +618,7 @@ export function ProviderList({
                 }
                 return renderProviderCardItem(group.providers[0]);
               })
-            : filteredProviders.map(renderProviderCardItem)}
+            : sortedAndFilteredProviders.map(renderProviderCardItem)}
         </div>
       </SortableContext>
     </DndContext>
@@ -547,20 +626,149 @@ export function ProviderList({
 
   return (
     <div className="mt-4 space-y-4">
-      {/* 顶栏控制区域：切换请求地址归类等 */}
-      <div className="flex items-center justify-end px-1">
-        <Button
-          variant={isGroupedByUrl ? "secondary" : "ghost"}
-          size="sm"
-          onClick={handleToggleGroupByUrl}
-          className="h-8 gap-1.5 text-xs font-normal border border-transparent transition-all"
-          title={t("provider.groupByUrl", { defaultValue: "按请求地址归类" })}
-        >
-          <Folder className="w-3.5 h-3.5 text-muted-foreground" />
-          <span>
-            {t("provider.groupByUrl", { defaultValue: "按请求地址归类" })}
-          </span>
-        </Button>
+      {/* 顶栏控制区域：排序选择、一键折叠展开、切换请求地址归类等 */}
+      <div className="flex items-center justify-between gap-2 px-1 text-xs text-muted-foreground">
+        <div className="flex items-center gap-1">
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-8 gap-1.5 text-xs font-normal border border-transparent hover:bg-muted"
+              >
+                <ArrowUpDown className="w-3.5 h-3.5 text-muted-foreground" />
+                <span>
+                  {sortBy === "custom"
+                    ? t("provider.sortDefault", {
+                        defaultValue: "默认拖拽顺序",
+                      })
+                    : sortBy === "name-asc"
+                      ? t("provider.sortNameAsc", {
+                          defaultValue: "按名称 (A-Z)",
+                        })
+                      : sortBy === "name-desc"
+                        ? t("provider.sortNameDesc", {
+                            defaultValue: "按名称 (Z-A)",
+                          })
+                        : sortBy === "url-asc"
+                          ? t("provider.sortUrlAsc", {
+                              defaultValue: "按请求地址 (A-Z)",
+                            })
+                          : sortBy === "time-desc"
+                            ? t("provider.sortTimeDesc", {
+                                defaultValue: "添加时间 (最新)",
+                              })
+                            : t("provider.sortTimeAsc", {
+                                defaultValue: "添加时间 (最早)",
+                              })}
+                </span>
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="w-48">
+              <DropdownMenuItem onClick={() => handleSetSortBy("custom")}>
+                <span className="flex-1">
+                  {t("provider.sortDefault", { defaultValue: "默认拖拽顺序" })}
+                </span>
+                {sortBy === "custom" && <Check className="w-3.5 h-3.5" />}
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => handleSetSortBy("name-asc")}>
+                <span className="flex-1">
+                  {t("provider.sortNameAsc", { defaultValue: "按名称 (A-Z)" })}
+                </span>
+                {sortBy === "name-asc" && <Check className="w-3.5 h-3.5" />}
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => handleSetSortBy("name-desc")}>
+                <span className="flex-1">
+                  {t("provider.sortNameDesc", { defaultValue: "按名称 (Z-A)" })}
+                </span>
+                {sortBy === "name-desc" && <Check className="w-3.5 h-3.5" />}
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => handleSetSortBy("url-asc")}>
+                <span className="flex-1">
+                  {t("provider.sortUrlAsc", {
+                    defaultValue: "按请求地址 (A-Z)",
+                  })}
+                </span>
+                {sortBy === "url-asc" && <Check className="w-3.5 h-3.5" />}
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => handleSetSortBy("time-desc")}>
+                <span className="flex-1">
+                  {t("provider.sortTimeDesc", {
+                    defaultValue: "添加时间 (最新)",
+                  })}
+                </span>
+                {sortBy === "time-desc" && <Check className="w-3.5 h-3.5" />}
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => handleSetSortBy("time-asc")}>
+                <span className="flex-1">
+                  {t("provider.sortTimeAsc", {
+                    defaultValue: "添加时间 (最早)",
+                  })}
+                </span>
+                {sortBy === "time-asc" && <Check className="w-3.5 h-3.5" />}
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+
+          {sortBy !== "custom" && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={handleSaveSortOrder}
+              className="h-8 gap-1 px-2 text-xs font-normal text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/10"
+              title={t("provider.saveSortOrder", {
+                defaultValue: "保存为当前顺序",
+              })}
+            >
+              <Save className="w-3.5 h-3.5" />
+              <span>
+                {t("provider.saveSortOrder", { defaultValue: "保存顺序" })}
+              </span>
+            </Button>
+          )}
+        </div>
+
+        <div className="flex items-center gap-1.5">
+          {isGroupedByUrl && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() =>
+                setForceExpand((prev) => (prev === true ? false : true))
+              }
+              className="h-8 gap-1.5 text-xs font-normal border border-transparent hover:bg-muted transition-all"
+              title={
+                forceExpand
+                  ? t("provider.collapseAll", { defaultValue: "全部收起" })
+                  : t("provider.expandAll", { defaultValue: "全部展开" })
+              }
+            >
+              {forceExpand ? (
+                <ChevronsDownUp className="w-3.5 h-3.5 text-muted-foreground" />
+              ) : (
+                <ChevronsUpDown className="w-3.5 h-3.5 text-muted-foreground" />
+              )}
+              <span>
+                {forceExpand
+                  ? t("provider.collapseAll", { defaultValue: "全部收起" })
+                  : t("provider.expandAll", { defaultValue: "全部展开" })}
+              </span>
+            </Button>
+          )}
+
+          <Button
+            variant={isGroupedByUrl ? "secondary" : "ghost"}
+            size="sm"
+            onClick={handleToggleGroupByUrl}
+            className="h-8 gap-1.5 text-xs font-normal border border-transparent transition-all"
+            title={t("provider.groupByUrl", { defaultValue: "按请求地址归类" })}
+          >
+            <Folder className="w-3.5 h-3.5 text-muted-foreground" />
+            <span>
+              {t("provider.groupByUrl", { defaultValue: "按请求地址归类" })}
+            </span>
+          </Button>
+        </div>
       </div>
 
       {claudeDesktopStatusMessages.length > 0 && (

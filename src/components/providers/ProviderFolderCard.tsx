@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Folder, FolderOpen, ChevronDown, CheckCircle2 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useTranslation } from "react-i18next";
@@ -9,6 +9,7 @@ interface ProviderFolderCardProps {
   count: number;
   containsCurrent?: boolean;
   defaultExpanded?: boolean;
+  forceExpand?: boolean | null;
   children: React.ReactNode;
 }
 
@@ -17,10 +18,17 @@ export function ProviderFolderCard({
   count,
   containsCurrent = false,
   defaultExpanded = true,
+  forceExpand = null,
   children,
 }: ProviderFolderCardProps) {
   const { t } = useTranslation();
   const [isExpanded, setIsExpanded] = useState(defaultExpanded);
+
+  useEffect(() => {
+    if (forceExpand !== null && forceExpand !== undefined) {
+      setIsExpanded(forceExpand);
+    }
+  }, [forceExpand]);
 
   return (
     <div
