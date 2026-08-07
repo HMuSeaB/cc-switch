@@ -5,7 +5,8 @@ import {
   useSortable,
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
-import React, {
+import {
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -64,10 +65,48 @@ import {
   useCurrentOmoProviderId,
   useCurrentOmoSlimProviderId,
 } from "@/lib/query/omo";
-import { useCallback } from "react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { isTextEditableTarget } from "@/utils/domUtils";
+
+const SORT_OPTIONS = [
+  "custom",
+  "name-asc",
+  "name-desc",
+  "url-asc",
+  "time-desc",
+  "time-asc",
+] as const;
+
+type SortOption = (typeof SORT_OPTIONS)[number];
+
+const SORT_LABEL_KEYS: Record<SortOption, string> = {
+  custom: "provider.sortDefault",
+  "name-asc": "provider.sortNameAsc",
+  "name-desc": "provider.sortNameDesc",
+  "url-asc": "provider.sortUrlAsc",
+  "time-desc": "provider.sortTimeDesc",
+  "time-asc": "provider.sortTimeAsc",
+};
+
+const SORT_LABEL_DEFAULTS: Record<SortOption, string> = {
+  custom: "默认拖拽顺序",
+  "name-asc": "按名称 (A-Z)",
+  "name-desc": "按名称 (Z-A)",
+  "url-asc": "按请求地址 (A-Z)",
+  "time-desc": "添加时间 (最新)",
+  "time-asc": "添加时间 (最早)",
+};
+
+const GROUP_BY_URL_KEY = "cc-switch:group-by-url";
+const SORT_BY_KEY = "cc-switch:sort-by";
+
+function parseSortOption(value: string | null): SortOption {
+  if (value && (SORT_OPTIONS as readonly string[]).includes(value)) {
+    return value as SortOption;
+  }
+  return "custom";
+}
 
 interface ProviderListProps {
   providers: Record<string, Provider>;
@@ -210,33 +249,32 @@ export function ProviderList({
     [appId, addToQueue, removeFromQueue],
   );
 
-  type SortOption =
-    "custom" | "name-asc" | "name-desc" | "url-asc" | "time-desc" | "time-asc";
-
   const [searchTerm, setSearchTerm] = useState("");
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [isGroupedByUrl, setIsGroupedByUrl] = useState(() => {
-    return localStorage.getItem("cc-switch:group-by-url") === "true";
+    return localStorage.getItem(GROUP_BY_URL_KEY) === "true";
   });
   const [sortBy, setSortBy] = useState<SortOption>(() => {
-    return (
-      (localStorage.getItem("cc-switch:sort-by") as SortOption) || "custom"
-    );
+    return parseSortOption(localStorage.getItem(SORT_BY_KEY));
   });
-  const [forceExpand, setForceExpand] = useState<boolean | null>(null);
+  // true=全部展开, false=全部收起；归类模式下传给文件夹卡片
+  const [allExpanded, setAllExpanded] = useState(true);
 
   const handleToggleGroupByUrl = useCallback(() => {
     setIsGroupedByUrl((prev) => {
       const next = !prev;
-      localStorage.setItem("cc-switch:group-by-url", String(next));
+      localStorage.setItem(GROUP_BY_URL_KEY, String(next));
+      if (next) setAllExpanded(true);
       return next;
     });
   }, []);
 
   const handleSetSortBy = useCallback((option: SortOption) => {
     setSortBy(option);
-    localStorage.setItem("cc-switch:sort-by", option);
+    localStorage.setItem(SORT_BY_KEY, option);
   }, []);
+
+  const canDragSort = sortBy === "custom" && !isGroupedByUrl;
 
   const searchInputRef = useRef<HTMLInputElement>(null);
   const { data: claudeDesktopStatus } = useQuery({
@@ -338,7 +376,14 @@ export function ProviderList({
   const sortedAndFilteredProviders = useMemo(() => {
     if (sortBy === "custom") return filteredProviders;
     const copy = [...filteredProviders];
-    const locale = i18n.language === "zh" ? "zh-CN" : "en-US";
+    const locale =
+      i18n.language === "zh"
+        ? "zh-CN"
+        : i18n.language === "zh-TW"
+          ? "zh-TW"
+          : i18n.language === "ja"
+            ? "ja"
+            : "en-US";
 
     return copy.sort((a, b) => {
       if (sortBy === "name-asc") {
@@ -382,7 +427,7 @@ export function ProviderList({
       }
       toast.success(t("provider.sortUpdated", { defaultValue: "排序已保存" }));
       setSortBy("custom");
-      localStorage.setItem("cc-switch:sort-by", "custom");
+      localStorage.setItem(SORT_BY_KEY, "custom");
     } catch (error) {
       toast.error(
         extractErrorMessage(error) ||
@@ -592,13 +637,14 @@ export function ProviderList({
 
   const renderProviderList = () => (
     <DndContext
-      sensors={sensors}
+      sensors={canDragSort ? sensors : []}
       collisionDetection={closestCenter}
-      onDragEnd={handleDragEnd}
+      onDragEnd={canDragSort ? handleDragEnd : undefined}
     >
       <SortableContext
         items={sortedAndFilteredProviders.map((provider) => provider.id)}
         strategy={verticalListSortingStrategy}
+        disabled={!canDragSort}
       >
         <div className="space-y-3">
           {isGroupedByUrl && groupedProviders
@@ -610,7 +656,7 @@ export function ProviderList({
                       url={group.displayUrl}
                       count={group.providers.length}
                       containsCurrent={group.containsCurrent}
-                      forceExpand={forceExpand}
+                      forceExpand={allExpanded}
                     >
                       <div className="space-y-3">
                         {group.providers.map(renderProviderCardItem)}
@@ -640,75 +686,26 @@ export function ProviderList({
               >
                 <ArrowUpDown className="w-3.5 h-3.5 text-muted-foreground" />
                 <span>
-                  {sortBy === "custom"
-                    ? t("provider.sortDefault", {
-                        defaultValue: "默认拖拽顺序",
-                      })
-                    : sortBy === "name-asc"
-                      ? t("provider.sortNameAsc", {
-                          defaultValue: "按名称 (A-Z)",
-                        })
-                      : sortBy === "name-desc"
-                        ? t("provider.sortNameDesc", {
-                            defaultValue: "按名称 (Z-A)",
-                          })
-                        : sortBy === "url-asc"
-                          ? t("provider.sortUrlAsc", {
-                              defaultValue: "按请求地址 (A-Z)",
-                            })
-                          : sortBy === "time-desc"
-                            ? t("provider.sortTimeDesc", {
-                                defaultValue: "添加时间 (最新)",
-                              })
-                            : t("provider.sortTimeAsc", {
-                                defaultValue: "添加时间 (最早)",
-                              })}
+                  {t(SORT_LABEL_KEYS[sortBy], {
+                    defaultValue: SORT_LABEL_DEFAULTS[sortBy],
+                  })}
                 </span>
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="start" className="w-48">
-              <DropdownMenuItem onClick={() => handleSetSortBy("custom")}>
-                <span className="flex-1">
-                  {t("provider.sortDefault", { defaultValue: "默认拖拽顺序" })}
-                </span>
-                {sortBy === "custom" && <Check className="w-3.5 h-3.5" />}
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => handleSetSortBy("name-asc")}>
-                <span className="flex-1">
-                  {t("provider.sortNameAsc", { defaultValue: "按名称 (A-Z)" })}
-                </span>
-                {sortBy === "name-asc" && <Check className="w-3.5 h-3.5" />}
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => handleSetSortBy("name-desc")}>
-                <span className="flex-1">
-                  {t("provider.sortNameDesc", { defaultValue: "按名称 (Z-A)" })}
-                </span>
-                {sortBy === "name-desc" && <Check className="w-3.5 h-3.5" />}
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => handleSetSortBy("url-asc")}>
-                <span className="flex-1">
-                  {t("provider.sortUrlAsc", {
-                    defaultValue: "按请求地址 (A-Z)",
-                  })}
-                </span>
-                {sortBy === "url-asc" && <Check className="w-3.5 h-3.5" />}
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => handleSetSortBy("time-desc")}>
-                <span className="flex-1">
-                  {t("provider.sortTimeDesc", {
-                    defaultValue: "添加时间 (最新)",
-                  })}
-                </span>
-                {sortBy === "time-desc" && <Check className="w-3.5 h-3.5" />}
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => handleSetSortBy("time-asc")}>
-                <span className="flex-1">
-                  {t("provider.sortTimeAsc", {
-                    defaultValue: "添加时间 (最早)",
-                  })}
-                </span>
-                {sortBy === "time-asc" && <Check className="w-3.5 h-3.5" />}
-              </DropdownMenuItem>
+              {SORT_OPTIONS.map((option) => (
+                <DropdownMenuItem
+                  key={option}
+                  onClick={() => handleSetSortBy(option)}
+                >
+                  <span className="flex-1">
+                    {t(SORT_LABEL_KEYS[option], {
+                      defaultValue: SORT_LABEL_DEFAULTS[option],
+                    })}
+                  </span>
+                  {sortBy === option && <Check className="w-3.5 h-3.5" />}
+                </DropdownMenuItem>
+              ))}
             </DropdownMenuContent>
           </DropdownMenu>
 
@@ -735,23 +732,21 @@ export function ProviderList({
             <Button
               variant="ghost"
               size="sm"
-              onClick={() =>
-                setForceExpand((prev) => (prev === true ? false : true))
-              }
+              onClick={() => setAllExpanded((prev) => !prev)}
               className="h-8 gap-1.5 text-xs font-normal border border-transparent hover:bg-muted transition-all"
               title={
-                forceExpand
+                allExpanded
                   ? t("provider.collapseAll", { defaultValue: "全部收起" })
                   : t("provider.expandAll", { defaultValue: "全部展开" })
               }
             >
-              {forceExpand ? (
+              {allExpanded ? (
                 <ChevronsDownUp className="w-3.5 h-3.5 text-muted-foreground" />
               ) : (
                 <ChevronsUpDown className="w-3.5 h-3.5 text-muted-foreground" />
               )}
               <span>
-                {forceExpand
+                {allExpanded
                   ? t("provider.collapseAll", { defaultValue: "全部收起" })
                   : t("provider.expandAll", { defaultValue: "全部展开" })}
               </span>

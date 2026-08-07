@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import { useState, useEffect, type ReactNode } from "react";
 import { Folder, FolderOpen, ChevronDown, CheckCircle2 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useTranslation } from "react-i18next";
@@ -9,8 +9,9 @@ interface ProviderFolderCardProps {
   count: number;
   containsCurrent?: boolean;
   defaultExpanded?: boolean;
+  /** 外部一键展开/收起；传入后覆盖本地展开状态 */
   forceExpand?: boolean | null;
-  children: React.ReactNode;
+  children: ReactNode;
 }
 
 export function ProviderFolderCard({
