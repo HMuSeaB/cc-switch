@@ -112,7 +112,7 @@ export function ProviderList({
   activeProviderId,
   onSetAsDefault,
 }: ProviderListProps) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const { checkProvider, isChecking } = useStreamCheck(appId);
   const { sortedProviders, sensors, handleDragEnd } = useDragSort(
     providers,
@@ -364,10 +364,12 @@ export function ProviderList({
 
   const handleSaveSortOrder = useCallback(async () => {
     try {
-      const updates = sortedAndFilteredProviders.map((provider, index) => ({
-        id: provider.id,
-        sortIndex: index,
-      }));
+      const updates = sortedAndFilteredProviders.map(
+        (provider: Provider, index: number) => ({
+          id: provider.id,
+          sortIndex: index,
+        }),
+      );
       await providersApi.updateSortOrder(updates, appId);
       await queryClient.invalidateQueries({ queryKey: ["providers", appId] });
       await queryClient.invalidateQueries({
