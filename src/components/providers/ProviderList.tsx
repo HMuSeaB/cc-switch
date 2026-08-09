@@ -274,7 +274,9 @@ export function ProviderList({
     localStorage.setItem(SORT_BY_KEY, option);
   }, []);
 
-  const canDragSort = sortBy === "custom" && !isGroupedByUrl;
+  // 分组只改变视觉层级，不改变供应商的全局排序能力。
+  // 拖拽手柄仍然负责调整所有供应商的顺序。
+  const canDragSort = sortBy === "custom";
 
   const searchInputRef = useRef<HTMLInputElement>(null);
   const { data: claudeDesktopStatus } = useQuery({
@@ -362,54 +364,57 @@ export function ProviderList({
     }
   }, [isSearchOpen]);
 
-  const filteredProviders = useMemo(() => {
+  const sortProviders = useCallback(
+    (input: Provider[]) => {
+      if (sortBy === "custom") return input;
+      const copy = [...input];
+      const locale =
+        i18n.language === "zh"
+          ? "zh-CN"
+          : i18n.language === "zh-TW"
+            ? "zh-TW"
+            : i18n.language === "ja"
+              ? "ja"
+              : "en-US";
+
+      return copy.sort((a, b) => {
+        if (sortBy === "name-asc") return a.name.localeCompare(b.name, locale);
+        if (sortBy === "name-desc") return b.name.localeCompare(a.name, locale);
+        if (sortBy === "url-asc") {
+          return getProviderApiUrl(a, "").localeCompare(
+            getProviderApiUrl(b, ""),
+            locale,
+          );
+        }
+        if (sortBy === "time-desc")
+          return (b.createdAt ?? 0) - (a.createdAt ?? 0);
+        if (sortBy === "time-asc")
+          return (a.createdAt ?? 0) - (b.createdAt ?? 0);
+        return 0;
+      });
+    },
+    [sortBy, i18n.language],
+  );
+
+  const sortedProvidersBySort = useMemo(
+    () => sortProviders(sortedProviders),
+    [sortProviders, sortedProviders],
+  );
+
+  const sortedAndFilteredProviders = useMemo(() => {
     const keyword = searchTerm.trim().toLowerCase();
-    if (!keyword) return sortedProviders;
-    return sortedProviders.filter((provider) => {
+    if (!keyword) return sortedProvidersBySort;
+    return sortedProvidersBySort.filter((provider) => {
       const fields = [provider.name, provider.notes, provider.websiteUrl];
       return fields.some((field) =>
         field?.toString().toLowerCase().includes(keyword),
       );
     });
-  }, [searchTerm, sortedProviders]);
-
-  const sortedAndFilteredProviders = useMemo(() => {
-    if (sortBy === "custom") return filteredProviders;
-    const copy = [...filteredProviders];
-    const locale =
-      i18n.language === "zh"
-        ? "zh-CN"
-        : i18n.language === "zh-TW"
-          ? "zh-TW"
-          : i18n.language === "ja"
-            ? "ja"
-            : "en-US";
-
-    return copy.sort((a, b) => {
-      if (sortBy === "name-asc") {
-        return a.name.localeCompare(b.name, locale);
-      }
-      if (sortBy === "name-desc") {
-        return b.name.localeCompare(a.name, locale);
-      }
-      if (sortBy === "url-asc") {
-        const urlA = getProviderApiUrl(a, "");
-        const urlB = getProviderApiUrl(b, "");
-        return urlA.localeCompare(urlB, locale);
-      }
-      if (sortBy === "time-desc") {
-        return (b.createdAt ?? 0) - (a.createdAt ?? 0);
-      }
-      if (sortBy === "time-asc") {
-        return (a.createdAt ?? 0) - (b.createdAt ?? 0);
-      }
-      return 0;
-    });
-  }, [filteredProviders, sortBy, i18n.language]);
+  }, [searchTerm, sortedProvidersBySort]);
 
   const handleSaveSortOrder = useCallback(async () => {
     try {
-      const updates = sortedAndFilteredProviders.map(
+      const updates = sortedProvidersBySort.map(
         (provider: Provider, index: number) => ({
           id: provider.id,
           sortIndex: index,
@@ -434,7 +439,7 @@ export function ProviderList({
           t("provider.sortUpdateFailed", { defaultValue: "排序更新失败" }),
       );
     }
-  }, [sortedAndFilteredProviders, appId, queryClient, t]);
+  }, [sortedProvidersBySort, appId, queryClient, t]);
 
   const groupedProviders = useMemo(() => {
     if (!isGroupedByUrl) return null;
@@ -847,7 +852,7 @@ export function ProviderList({
         )}
       </AnimatePresence>
 
-      {filteredProviders.length === 0 ? (
+      {sortedAndFilteredProviders.length === 0 ? (
         <div className="px-6 py-8 text-sm text-center border border-dashed rounded-lg border-border text-muted-foreground">
           {t("provider.noSearchResults", {
             defaultValue: "No providers match your search.",

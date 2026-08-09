@@ -175,6 +175,25 @@ describe("ClaudeFormFields", () => {
     });
   });
 
+  it("一键设置优先使用最近选择的模型，而不是旧的兜底模型", () => {
+    const onModelChange = vi.fn();
+    renderCopilotForm({
+      claudeModel: "old-fallback",
+      defaultSonnetModel: "old-sonnet",
+      onModelChange,
+    });
+
+    const modelInput = screen.getByDisplayValue("old-fallback");
+    fireEvent.change(modelInput, { target: { value: "new-model" } });
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "一键设置",
+      }),
+    );
+
+    expect(onModelChange).toHaveBeenCalledWith("ANTHROPIC_MODEL", "new-model");
+  });
+
   it("一键设置会同时写入 Subagent 模型", () => {
     const onModelChange = vi.fn();
     renderCopilotForm({

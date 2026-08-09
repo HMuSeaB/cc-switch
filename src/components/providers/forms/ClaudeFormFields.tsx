@@ -272,6 +272,8 @@ export function ClaudeFormFields({
   // 通用模型获取（非 Copilot 供应商）
   const [fetchedModels, setFetchedModels] = useState<FetchedModel[]>([]);
   const [isFetchingModels, setIsFetchingModels] = useState(false);
+  // 一键设置应优先使用用户最近一次选择/编辑的请求模型，避免仍取初始兜底模型。
+  const lastEditedModelRef = useRef("");
 
   const showModelFetchResult = useCallback(
     (count: number) => {
@@ -465,8 +467,12 @@ export function ClaudeFormFields({
     placeholder?: string,
     onValueChange?: (value: string) => void,
   ) => {
-    const updateValue =
+    const updateValueBase =
       onValueChange ?? ((next: string) => onModelChange(field, next));
+    const updateValue = (next: string) => {
+      lastEditedModelRef.current = next;
+      updateValueBase(next);
+    };
 
     if (isCodexOauthPreset) {
       return (
@@ -906,6 +912,7 @@ export function ClaudeFormFields({
                     size="sm"
                     onClick={() => {
                       const value =
+                        lastEditedModelRef.current.trim() ||
                         claudeModel ||
                         defaultSonnetModel ||
                         defaultOpusModel ||
