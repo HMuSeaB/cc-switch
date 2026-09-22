@@ -23,6 +23,7 @@ import {
   Folder,
   Save,
   Search,
+  Sparkles,
   X,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
@@ -37,6 +38,7 @@ import {
   getProviderGroupKey,
 } from "@/utils/providerUrlUtils";
 import { useDragSort } from "@/hooks/useDragSort";
+import { useProviderFolders } from "@/hooks/useProviderFolders";
 import {
   useOpenClawLiveProviderIds,
   useOpenClawDefaultModel,
@@ -49,6 +51,9 @@ import { useStreamCheck } from "@/hooks/useStreamCheck";
 import { ProviderCard } from "@/components/providers/ProviderCard";
 import { ProviderEmptyState } from "@/components/providers/ProviderEmptyState";
 import { ProviderFolderCard } from "@/components/providers/ProviderFolderCard";
+import { FolderManageDialog } from "@/components/providers/FolderManageDialog";
+import { FolderSuggestDialog } from "@/components/providers/FolderSuggestDialog";
+import { FolderPlus } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -99,6 +104,7 @@ const SORT_LABEL_DEFAULTS: Record<SortOption, string> = {
 };
 
 const GROUP_BY_URL_KEY = "cc-switch:group-by-url";
+const GROUP_BY_FOLDER_KEY = "cc-switch:group-by-folder";
 const SORT_BY_KEY = "cc-switch:sort-by";
 
 function parseSortOption(value: string | null): SortOption {
@@ -251,6 +257,59 @@ export function ProviderList({
 
   const [searchTerm, setSearchTerm] = useState("");
   const [isSearchOpen, setIsSearchOpen] = useState(false);
+  const {
+    folders: customFolders,
+    renameFolder,
+    deleteFolder,
+    createFolder,
+  } = useProviderFolders(appId);
+
+  const queryClient = useQueryClient();
+
+  const [isGroupedByFolder, setIsGroupedByFolder] = useState(() => {
+    const saved = localStorage.getItem(GROUP_BY_FOLDER_KEY);
+    return saved !== null ? saved === "true" : true;
+  });
+  const [folderDialogOpen, setFolderDialogOpen] = useState(false);
+  const [folderDialogMode, setFolderDialogMode] = useState<"create" | "rename">(
+    "create",
+  );
+  const [targetRenameFolder, setTargetRenameFolder] = useState("");
+  const [suggestDialogOpen, setSuggestDialogOpen] = useState(false);
+
+  const handleToggleGroupByFolder = useCallback(() => {
+    setIsGroupedByFolder((prev) => {
+      const next = !prev;
+      localStorage.setItem(GROUP_BY_FOLDER_KEY, String(next));
+      if (next) setAllExpanded(true);
+      return next;
+    });
+  }, []);
+
+  const handleCreateFolder = useCallback(
+    async (name: string) => {
+      await createFolder.mutateAsync(name);
+    },
+    [createFolder],
+  );
+
+  const handleRenameFolder = useCallback(
+    async (name: string) => {
+      await renameFolder.mutateAsync({
+        oldName: targetRenameFolder,
+        newName: name,
+      });
+    },
+    [renameFolder, targetRenameFolder],
+  );
+
+  const handleDeleteFolder = useCallback(
+    async (folderName: string) => {
+      await deleteFolder.mutate(folderName);
+    },
+    [deleteFolder],
+  );
+
   const [isGroupedByUrl, setIsGroupedByUrl] = useState(() => {
     return localStorage.getItem(GROUP_BY_URL_KEY) === "true";
   });
@@ -295,7 +354,7 @@ export function ProviderList({
   );
 
   // Import current live config as default provider
-  const queryClient = useQueryClient();
+
   const importMutation = useMutation({
     mutationFn: async (): Promise<boolean> => {
       if (appId === "opencode") {
@@ -440,6 +499,78 @@ export function ProviderList({
       );
     }
   }, [sortedProvidersBySort, appId, queryClient, t]);
+
+  const groupedByFolderProviders = useMemo(() => {
+    if (!isGroupedByFolder) return null;
+
+    const unclassifiedText = t("provider.unclassified", {
+      defaultValue: "未分组",
+    });
+    const map = new Map<
+      string,
+      { folderName: string; providers: Provider[]; containsCurrent: boolean }
+    >();
+
+    // 先按注册表顺序铺好骨架，让空文件夹也能显示；Map 保插入序，
+    // 所以后面的 groups 数组天然继承了 Rust 端排好的 sortIndex 顺序。
+    for (const f of customFolders) {
+      map.set(f.name, {
+        folderName: f.name,
+        providers: [],
+        containsCurrent: false,
+      });
+    }
+
+    for (const provider of sortedAndFilteredProviders) {
+      const folderName = provider.folder?.trim() || unclassifiedText;
+      const isOmo = provider.category === "omo";
+      const isOmoSlim = provider.category === "omo-slim";
+      const isCurrent = isOmo
+        ? provider.id === (currentOmoId || "")
+        : isOmoSlim
+          ? provider.id === (currentOmoSlimId || "")
+          : appId === "hermes"
+            ? hermesCurrentProviderId === provider.id
+            : provider.id === currentProviderId;
+
+      let entry = map.get(folderName);
+      if (!entry) {
+        // 供应商带了个没登记过的 folder 名（导入的快照、旧版本数据）。
+        // 追加在注册表之后，比字母序更符合直觉：用户没排过的排最后。
+        entry = { folderName, providers: [], containsCurrent: false };
+        map.set(folderName, entry);
+      }
+      entry.providers.push(provider);
+      if (isCurrent) {
+        entry.containsCurrent = true;
+      }
+    }
+
+    const registered = new Set(customFolders.map((f) => f.name));
+    const groups = Array.from(map.values()).filter(
+      (g) => g.providers.length > 0 || registered.has(g.folderName),
+    );
+
+    // 只把「未分组」强制压到末尾；其余保持注册表顺序 + 未登记分组追加在后的顺序。
+    // 这里刻意不用 localeCompare：那样用户排的文件夹顺序会被字母序覆盖掉。
+    groups.sort((a, b) => {
+      if (a.folderName === unclassifiedText) return 1;
+      if (b.folderName === unclassifiedText) return -1;
+      return 0;
+    });
+
+    return groups;
+  }, [
+    sortedAndFilteredProviders,
+    isGroupedByFolder,
+    customFolders,
+    currentOmoId,
+    currentOmoSlimId,
+    appId,
+    hermesCurrentProviderId,
+    currentProviderId,
+    t,
+  ]);
 
   const groupedProviders = useMemo(() => {
     if (!isGroupedByUrl) return null;
@@ -652,26 +783,60 @@ export function ProviderList({
         disabled={!canDragSort}
       >
         <div className="space-y-3">
-          {isGroupedByUrl && groupedProviders
-            ? groupedProviders.map((group) => {
-                if (group.providers.length >= 2) {
-                  return (
-                    <ProviderFolderCard
-                      key={group.groupKey}
-                      url={group.displayUrl}
-                      count={group.providers.length}
-                      containsCurrent={group.containsCurrent}
-                      forceExpand={allExpanded}
-                    >
-                      <div className="space-y-3">
-                        {group.providers.map(renderProviderCardItem)}
-                      </div>
-                    </ProviderFolderCard>
-                  );
-                }
-                return renderProviderCardItem(group.providers[0]);
+          {isGroupedByFolder && groupedByFolderProviders
+            ? groupedByFolderProviders.map((group) => {
+                const isUnclassified =
+                  group.folderName ===
+                  t("provider.unclassified", { defaultValue: "未分组" });
+                return (
+                  <ProviderFolderCard
+                    key={group.folderName}
+                    name={group.folderName}
+                    count={group.providers.length}
+                    containsCurrent={group.containsCurrent}
+                    forceExpand={allExpanded}
+                    isCustomFolder={!isUnclassified}
+                    onRename={() => {
+                      setTargetRenameFolder(group.folderName);
+                      setFolderDialogMode("rename");
+                      setFolderDialogOpen(true);
+                    }}
+                    onDelete={() => handleDeleteFolder(group.folderName)}
+                  >
+                    <div className="space-y-3">
+                      {group.providers.length > 0 ? (
+                        group.providers.map(renderProviderCardItem)
+                      ) : (
+                        <div className="py-4 text-center text-xs text-muted-foreground border border-dashed rounded-xl border-border/50">
+                          {t("provider.folderEmpty", {
+                            defaultValue: "文件夹为空，编辑供应商可移入此处",
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  </ProviderFolderCard>
+                );
               })
-            : sortedAndFilteredProviders.map(renderProviderCardItem)}
+            : isGroupedByUrl && groupedProviders
+              ? groupedProviders.map((group) => {
+                  if (group.providers.length >= 2) {
+                    return (
+                      <ProviderFolderCard
+                        key={group.groupKey}
+                        url={group.displayUrl}
+                        count={group.providers.length}
+                        containsCurrent={group.containsCurrent}
+                        forceExpand={allExpanded}
+                      >
+                        <div className="space-y-3">
+                          {group.providers.map(renderProviderCardItem)}
+                        </div>
+                      </ProviderFolderCard>
+                    );
+                  }
+                  return renderProviderCardItem(group.providers[0]);
+                })
+              : sortedAndFilteredProviders.map(renderProviderCardItem)}
         </div>
       </SortableContext>
     </DndContext>
@@ -757,6 +922,48 @@ export function ProviderList({
               </span>
             </Button>
           )}
+
+          <Button
+            variant={isGroupedByFolder ? "secondary" : "ghost"}
+            size="sm"
+            onClick={handleToggleGroupByFolder}
+            className="h-8 gap-1.5 text-xs font-normal border border-transparent transition-all rounded-lg"
+            title={t("provider.groupByFolder", {
+              defaultValue: "自定义文件夹分组",
+            })}
+          >
+            <Folder className="w-3.5 h-3.5 text-muted-foreground" />
+            <span>{t("provider.folder", { defaultValue: "文件夹" })}</span>
+          </Button>
+
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => {
+              setFolderDialogMode("create");
+              setFolderDialogOpen(true);
+            }}
+            className="h-8 gap-1.5 text-xs font-normal border border-transparent hover:bg-muted transition-all rounded-lg"
+            title={t("provider.newFolder", { defaultValue: "新建文件夹" })}
+          >
+            <FolderPlus className="w-3.5 h-3.5 text-muted-foreground" />
+            <span>
+              {t("provider.newFolder", { defaultValue: "新建文件夹" })}
+            </span>
+          </Button>
+
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => setSuggestDialogOpen(true)}
+            className="h-8 gap-1.5 text-xs font-normal border border-transparent hover:bg-muted transition-all rounded-lg"
+            title={t("provider.smartGroup", { defaultValue: "智能分组" })}
+          >
+            <Sparkles className="w-3.5 h-3.5 text-muted-foreground" />
+            <span>
+              {t("provider.smartGroup", { defaultValue: "智能分组" })}
+            </span>
+          </Button>
 
           <Button
             variant={isGroupedByUrl ? "secondary" : "ghost"}
@@ -861,6 +1068,25 @@ export function ProviderList({
       ) : (
         renderProviderList()
       )}
+
+      <FolderManageDialog
+        open={folderDialogOpen}
+        onOpenChange={setFolderDialogOpen}
+        mode={folderDialogMode}
+        initialName={folderDialogMode === "rename" ? targetRenameFolder : ""}
+        existingFolders={customFolders.map((f) => f.name)}
+        onSave={
+          folderDialogMode === "rename"
+            ? handleRenameFolder
+            : handleCreateFolder
+        }
+      />
+
+      <FolderSuggestDialog
+        open={suggestDialogOpen}
+        onOpenChange={setSuggestDialogOpen}
+        appId={appId}
+      />
     </div>
   );
 }
