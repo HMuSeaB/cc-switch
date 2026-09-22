@@ -41,6 +41,9 @@ pub struct Provider {
     #[serde(default)]
     #[serde(rename = "inFailoverQueue")]
     pub in_failover_queue: bool,
+    /// 自定义文件夹/分组
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub folder: Option<String>,
 }
 
 impl Provider {
@@ -64,6 +67,7 @@ impl Provider {
             icon: None,
             icon_color: None,
             in_failover_queue: false,
+            folder: None,
         }
     }
 
@@ -424,6 +428,9 @@ pub struct ProviderMeta {
     /// 自定义端点列表（按 URL 去重存储）
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub custom_endpoints: HashMap<String, crate::settings::CustomEndpoint>,
+    /// 自定义文件夹/分组
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub folder: Option<String>,
     /// 是否在写入 live 时应用通用配置片段
     #[serde(
         rename = "commonConfigEnabled",
@@ -791,6 +798,7 @@ impl UniversalProvider {
             icon: self.icon.clone(),
             icon_color: self.icon_color.clone(),
             in_failover_queue: false,
+            folder: None,
         })
     }
 
@@ -856,6 +864,7 @@ requires_openai_auth = true"#
             icon: self.icon.clone(),
             icon_color: self.icon_color.clone(),
             in_failover_queue: false,
+            folder: None,
         })
     }
 
@@ -891,6 +900,7 @@ requires_openai_auth = true"#
             icon: self.icon.clone(),
             icon_color: self.icon_color.clone(),
             in_failover_queue: false,
+            folder: None,
         })
     }
 }

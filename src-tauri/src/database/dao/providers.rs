@@ -46,6 +46,7 @@ impl Database {
                 let settings_config =
                     serde_json::from_str(&settings_config_str).unwrap_or(serde_json::Value::Null);
                 let meta: ProviderMeta = serde_json::from_str(&meta_str).unwrap_or_default();
+                let folder = meta.folder.clone();
 
                 Ok((
                     id,
@@ -62,6 +63,7 @@ impl Database {
                         icon,
                         icon_color,
                         in_failover_queue,
+                        folder,
                     },
                 ))
             })
@@ -152,6 +154,7 @@ impl Database {
 
                 let settings_config = serde_json::from_str(&settings_config_str).unwrap_or(serde_json::Value::Null);
                 let meta: ProviderMeta = serde_json::from_str(&meta_str).unwrap_or_default();
+                let folder = meta.folder.clone();
 
                 Ok(Provider {
                     id: id.to_string(),
@@ -166,6 +169,7 @@ impl Database {
                     icon,
                     icon_color,
                     in_failover_queue,
+                    folder,
                 })
             },
         );
@@ -184,6 +188,9 @@ impl Database {
             .map_err(|e| AppError::Database(e.to_string()))?;
 
         let mut meta_clone = provider.meta.clone().unwrap_or_default();
+        if provider.folder.is_some() {
+            meta_clone.folder = provider.folder.clone();
+        }
         let endpoints = std::mem::take(&mut meta_clone.custom_endpoints);
 
         let existing: Option<(bool, bool)> = tx
@@ -486,6 +493,8 @@ impl Database {
             })?
         };
 
+        let folder = meta.folder.clone();
+
         Ok(Some(Provider {
             id,
             name,
@@ -499,6 +508,7 @@ impl Database {
             icon: None,
             icon_color: None,
             in_failover_queue: false,
+            folder,
         }))
     }
 
