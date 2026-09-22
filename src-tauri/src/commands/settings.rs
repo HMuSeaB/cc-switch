@@ -48,6 +48,22 @@ fn merge_settings_for_save(
     // 开关）后、前端 query 缓存刷新前的一次全量保存会把旧 marker 重放回来，
     // 重新开启时被"复活"的标记挡住而漏迁。
     incoming.local_migrations = existing.local_migrations.clone();
+
+    // TypeSafe Key：get_settings_for_frontend 总是清空它，所以"传空"意味着
+    // "保持现有"而不是"用户主动清空"。真正要清空由 set_typesafe_config 显式处理。
+    // 否则前端任何一次全量设置保存都会把用户配好的 Key 抹掉。
+    if incoming
+        .typesafe_api_key
+        .as_deref()
+        .is_none_or(|k| k.is_empty())
+        && existing
+            .typesafe_api_key
+            .as_deref()
+            .is_some_and(|k| !k.is_empty())
+    {
+        incoming.typesafe_api_key = existing.typesafe_api_key.clone();
+    }
+
     incoming
 }
 

@@ -83,6 +83,295 @@ pub fn remove_provider_from_live_config(
         .map_err(|e| e.to_string())
 }
 
+// --- 自定义文件夹注册表 ---
+
+/// 读取指定 app 的自定义文件夹列表（按 sort_index 排序，未排序的排在后面）
+#[tauri::command]
+pub fn get_provider_folders(
+    state: State<'_, AppState>,
+    app: String,
+) -> Result<Vec<crate::database::ProviderFolder>, String> {
+    let app_type = AppType::from_str(&app).map_err(|e| e.to_string())?;
+    let mut folders = state
+        .db
+        .get_provider_folders(app_type.as_str())
+        .map_err(|e| e.to_string())?;
+    crate::database::sort_folders(&mut folders);
+    Ok(folders)
+}
+
+/// 批量把若干供应商移入（或移出，folder=None）指定文件夹，单事务。
+/// 返回实际变更的供应商数量。
+#[tauri::command]
+pub fn set_providers_folder(
+    state: State<'_, AppState>,
+    app: String,
+    providerIds: Vec<String>,
+    folder: Option<String>,
+) -> Result<usize, String> {
+    let app_type = AppType::from_str(&app).map_err(|e| e.to_string())?;
+    state
+        .db
+        .set_providers_folder(app_type.as_str(), &providerIds, folder.as_deref())
+        .map_err(|e| e.to_string())
+}
+
+/// 新建文件夹。只需登记注册表；供应商的归组由后续 set_providers_folder 完成。
+#[tauri::command]
+pub fn create_provider_folder(
+    state: State<'_, AppState>,
+    app: String,
+    name: String,
+) -> Result<Vec<crate::database::ProviderFolder>, String> {
+    let app_type = AppType::from_str(&app).map_err(|e| e.to_string())?;
+    let app_type = app_type.as_str();
+
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return Err("文件夹名称不能为空".to_string());
+    }
+
+    let mut folders = state
+        .db
+        .get_provider_folders(app_type)
+        .map_err(|e| e.to_string())?;
+    if folders.iter().any(|f| f.name == trimmed) {
+        return Err("该文件夹已存在".to_string());
+    }
+
+    folders.push(crate::database::ProviderFolder {
+        id: format!("folder_{}", folders.len()),
+        name: trimmed.to_string(),
+        sort_index: None,
+        is_expanded: Some(true),
+    });
+    state
+        .db
+        .save_provider_folders(app_type, &folders)
+        .map_err(|e| e.to_string())?;
+
+    crate::database::sort_folders(&mut folders);
+    Ok(folders)
+}
+
+/// 重命名文件夹：注册表 + 所有归属供应商一起改，单事务。
+/// 返回被改动 folder 的供应商数量。
+#[tauri::command]
+pub fn rename_provider_folder(
+    state: State<'_, AppState>,
+    app: String,
+    oldName: String,
+    newName: String,
+) -> Result<usize, String> {
+    let app_type = AppType::from_str(&app).map_err(|e| e.to_string())?;
+    state
+        .db
+        .rename_provider_folder(app_type.as_str(), &oldName, &newName)
+        .map_err(|e| e.to_string())
+}
+
+/// 解散文件夹：从注册表移除，归属供应商移到未分组。
+/// 返回被移到未分组的供应商数量。
+#[tauri::command]
+pub fn delete_provider_folder(
+    state: State<'_, AppState>,
+    app: String,
+    name: String,
+) -> Result<usize, String> {
+    let app_type = AppType::from_str(&app).map_err(|e| e.to_string())?;
+    state
+        .db
+        .delete_provider_folder(app_type.as_str(), &name)
+        .map_err(|e| e.to_string())
+}
+
+/// 保存文件夹排序（前端拖拽文件夹后调用）。
+#[tauri::command]
+pub fn save_provider_folders_order(
+    state: State<'_, AppState>,
+    app: String,
+    folderNames: Vec<String>,
+) -> Result<bool, String> {
+    let app_type = AppType::from_str(&app).map_err(|e| e.to_string())?;
+    let app_type = app_type.as_str();
+
+    let mut folders = state
+        .db
+        .get_provider_folders(app_type)
+        .map_err(|e| e.to_string())?;
+
+    // 按传入顺序重写 sort_index；不在列表里的文件夹排最后，保持原相对顺序
+    for (index, name) in folderNames.iter().enumerate() {
+        if let Some(f) = folders.iter_mut().find(|f| &f.name == name) {
+            f.sort_index = Some(index);
+        }
+    }
+    let extra = folders.len();
+    for f in folders.iter_mut().filter(|f| f.sort_index.is_none()) {
+        f.sort_index = Some(extra);
+    }
+
+    state
+        .db
+        .save_provider_folders(app_type, &folders)
+        .map(|_| true)
+        .map_err(|e| e.to_string())
+}
+
+/// 保存文件夹展开/收起状态。
+#[tauri::command]
+pub fn set_provider_folder_expanded(
+    state: State<'_, AppState>,
+    app: String,
+    name: String,
+    isExpanded: bool,
+) -> Result<bool, String> {
+    let app_type = AppType::from_str(&app).map_err(|e| e.to_string())?;
+    let app_type = app_type.as_str();
+
+    let mut folders = state
+        .db
+        .get_provider_folders(app_type)
+        .map_err(|e| e.to_string())?;
+    if let Some(f) = folders.iter_mut().find(|f| f.name == name.trim()) {
+        f.is_expanded = Some(isExpanded);
+        state
+            .db
+            .save_provider_folders(app_type, &folders)
+            .map(|_| true)
+            .map_err(|e| e.to_string())
+    } else {
+        Ok(false)
+    }
+}
+
+// --- 智能分组（TypeSafe / Jev） ---
+
+/// TypeSafe 配置状态（给前端判断"配没配"用，不含真 key）
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FolderSuggestConfigStatus {
+    pub configured: bool,
+    pub base_url: String,
+    pub model: String,
+}
+
+/// 读取智能分组配置状态。key 是否已配置是唯一暴露的信息。
+#[tauri::command]
+pub fn get_folder_suggest_config() -> FolderSuggestConfigStatus {
+    let settings = crate::settings::get_settings();
+    let configured = settings
+        .typesafe_api_key
+        .as_deref()
+        .is_some_and(|k| !k.trim().is_empty());
+
+    FolderSuggestConfigStatus {
+        configured,
+        base_url: settings
+            .typesafe_base_url
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| crate::services::typesafe::DEFAULT_BASE_URL.to_string()),
+        model: settings
+            .typesafe_model
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| crate::services::typesafe::DEFAULT_MODEL.to_string()),
+    }
+}
+
+/// 保存 TypeSafe 配置。
+///
+/// `apiKey` 传 `None` 或空串 = 保持现有 key 不变（前端拿不到真值，无法回传）；
+/// 只有 `clearApiKey = true` 才真正清空。这样设置页的"保存"不会误抹掉 key。
+#[tauri::command]
+pub fn set_folder_suggest_config(
+    apiKey: Option<String>,
+    baseUrl: Option<String>,
+    model: Option<String>,
+    clearApiKey: Option<bool>,
+) -> Result<bool, String> {
+    let mut settings = crate::settings::get_settings();
+
+    let clear = clearApiKey.unwrap_or(false);
+    if clear {
+        settings.typesafe_api_key = None;
+    } else if let Some(key) = apiKey {
+        let trimmed = key.trim().to_string();
+        // 空串视为"不改"：与 merge_settings_for_save 的语义保持一致
+        if !trimmed.is_empty() {
+            settings.typesafe_api_key = Some(trimmed);
+        }
+    }
+
+    settings.typesafe_base_url = baseUrl
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    settings.typesafe_model = model
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+
+    crate::settings::update_settings(settings).map_err(|e| e.to_string())?;
+    Ok(true)
+}
+
+/// 为指定 app 的未分组供应商生成文件夹归组建议。
+///
+/// 返回的建议只供人工审查，**不会自动改动任何供应商**。
+#[tauri::command]
+pub async fn suggest_provider_folders(
+    state: State<'_, AppState>,
+    app: String,
+) -> Result<crate::services::folder_suggest::FolderSuggestResult, String> {
+    let app_type = AppType::from_str(&app).map_err(|e| e.to_string())?;
+    let app_type = app_type.as_str();
+
+    let providers = state
+        .db
+        .get_all_providers(app_type)
+        .map_err(|e| e.to_string())?;
+    let folders = state
+        .db
+        .get_provider_folders(app_type)
+        .map_err(|e| e.to_string())?;
+
+    // 候选文件夹 = 注册表里的名字 ∪ 供应商已经在用的名字。
+    // 只用注册表会漏掉"从导入快照来的孤儿分组"，那些也是合理的归组目标。
+    let mut existing: Vec<String> = folders.iter().map(|f| f.name.clone()).collect();
+    for provider in providers.values() {
+        if let Some(name) = provider.folder.as_deref().map(str::trim) {
+            if !name.is_empty() && !existing.iter().any(|f| f == name) {
+                existing.push(name.to_string());
+            }
+        }
+    }
+
+    let ungrouped: Vec<&crate::provider::Provider> = providers
+        .values()
+        .filter(|p| p.folder.as_deref().map(str::trim).unwrap_or("").is_empty())
+        .collect();
+
+    let settings = crate::settings::get_settings();
+    let config = crate::services::typesafe::TypeSafeConfig {
+        api_key: settings.typesafe_api_key.unwrap_or_default(),
+        base_url: settings
+            .typesafe_base_url
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| crate::services::typesafe::DEFAULT_BASE_URL.to_string()),
+        model: settings
+            .typesafe_model
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| crate::services::typesafe::DEFAULT_MODEL.to_string()),
+    };
+
+    Ok(crate::services::folder_suggest::suggest_folders(
+        crate::services::folder_suggest::SuggestInput {
+            ungrouped,
+            existing_folders: existing,
+            config,
+        },
+    )
+    .await)
+}
+
 fn switch_provider_internal(
     state: &AppState,
     app_type: AppType,

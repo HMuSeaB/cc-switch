@@ -403,6 +403,18 @@ pub struct AppSettings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub language: Option<String>,
 
+    // ===== TypeSafe System One (Jev) 智能分组 =====
+    /// TypeSafe API Key。设备级，不同步（各设备各自配置）。
+    /// `get_settings_for_frontend` 会清空它，前端只用来判断"配没配"。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub typesafe_api_key: Option<String>,
+    /// TypeSafe API 地址，留空用默认 `https://api.typesafe.ai/v1`
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub typesafe_base_url: Option<String>,
+    /// 使用的模型，留空用默认 `jev-latest`
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub typesafe_model: Option<String>,
+
     // ===== 主页面显示的应用 =====
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub visible_apps: Option<VisibleApps>,
@@ -525,6 +537,9 @@ impl Default for AppSettings {
             first_run_notice_confirmed: None,
             common_config_confirmed: None,
             language: None,
+            typesafe_api_key: None,
+            typesafe_base_url: None,
+            typesafe_model: None,
             visible_apps: None,
             claude_config_dir: None,
             codex_config_dir: None,
@@ -740,6 +755,11 @@ pub fn get_settings_for_frontend() -> AppSettings {
     }
     if let Some(s3) = &mut settings.s3_sync {
         s3.secret_access_key.clear();
+    }
+    // TypeSafe Key 同样属于凭据：清空后前端只能判断"配没配"，
+    // 拿不到真值。真值只在后端读 settings 时用。
+    if let Some(key) = &mut settings.typesafe_api_key {
+        key.clear();
     }
     settings.webdav_backup = None;
     settings
