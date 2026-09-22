@@ -476,19 +476,45 @@ mod tests {
     use super::*;
     use serial_test::serial;
 
+    /// 隔离 home 目录的测试辅助。
+    ///
+    /// 两个坑都踩过，改动前先读：
+    ///
+    /// 1. **不能把恢复写在闭包调用之后**。`tempdir` 在闭包返回时就 Drop 掉目录，
+    ///    而写在后面的恢复代码排在这之后执行；一旦闭包里断言失败直接 panic，
+    ///    `CC_SWITCH_TEST_HOME` 会带着一个已删除的路径泄漏到后续测试，
+    ///    后面的测试把文件写进不存在的目录、再静默落到真实用户目录。
+    ///    所以用 RAII guard：无论正常返回还是 panic，都在 `tempdir` 析构**之前**
+    ///    （字段声明顺序决定析构顺序，`_guard` 声明在 `temp` 之前，所以后析构）
+    ///    把环境变量还原。
+    /// 2. **`get_app_config_dir()` 必须真的走到临时目录**。Windows 上有条
+    ///    v3.10.3 兼容回退会看 `$HOME/.cc-switch/`，临时目录里没有 db 时它会
+    ///    恒成立，详情见 `config::get_app_config_dir` 的注释。那条回退现在被
+    ///    `test_home_override_active()` 挡住了。
+    struct TestHomeGuard {
+        temp: tempfile::TempDir,
+        previous: Option<std::ffi::OsString>,
+    }
+
+    impl Drop for TestHomeGuard {
+        fn drop(&mut self) {
+            match self.previous.take() {
+                Some(value) => std::env::set_var("CC_SWITCH_TEST_HOME", value),
+                None => std::env::remove_var("CC_SWITCH_TEST_HOME"),
+            }
+        }
+    }
+
     fn with_test_home(test: impl FnOnce(&Database, &PathBuf)) {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let previous = std::env::var_os("CC_SWITCH_TEST_HOME");
-        std::env::set_var("CC_SWITCH_TEST_HOME", temp.path());
+        let guard = TestHomeGuard {
+            temp: tempfile::tempdir().expect("tempdir"),
+            previous: std::env::var_os("CC_SWITCH_TEST_HOME"),
+        };
+        std::env::set_var("CC_SWITCH_TEST_HOME", guard.temp.path());
 
         let db = Database::memory().expect("memory database");
         let path = model_pricing_file_path();
         test(&db, &path);
-
-        match previous {
-            Some(value) => std::env::set_var("CC_SWITCH_TEST_HOME", value),
-            None => std::env::remove_var("CC_SWITCH_TEST_HOME"),
-        }
     }
 
     fn sample_pricing() -> ModelPricingInfo {
