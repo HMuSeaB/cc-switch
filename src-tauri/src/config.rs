@@ -33,6 +33,16 @@ pub fn get_home_dir() -> PathBuf {
     })
 }
 
+/// `CC_SWITCH_TEST_HOME` 是否生效（供 `get_app_config_dir` 判断能否走兼容回退）。
+///
+/// 判定条件必须与 `get_home_dir` 完全一致，否则会出现"这里说没覆盖、那里却
+/// 已经用了临时目录"的割裂。
+pub fn test_home_override_active() -> bool {
+    std::env::var("CC_SWITCH_TEST_HOME")
+        .map(|value| !value.trim().is_empty())
+        .unwrap_or(false)
+}
+
 /// 获取 Claude Code 配置目录路径
 pub fn get_claude_config_dir() -> PathBuf {
     if let Some(custom) = crate::settings::get_claude_override_dir() {
@@ -211,6 +221,16 @@ pub fn get_app_config_dir() -> PathBuf {
     // v3.10.3 可能在 `HOME/.cc-switch/` 下创建/使用了数据库。
     // 这里仅在“默认位置没有数据库”时回退到旧位置，避免再次出现“供应商消失”问题，
     // 同时也避免新安装因为 `HOME` 被设置而写入非预期路径。
+    //
+    // 测试隔离优先：`CC_SWITCH_TEST_HOME` 是测试/调试专用覆盖，一旦设置就必须
+    // 尊重它。否则临时目录里本来就没有 `cc-switch.db`，下面这条兼容分支会恒成立，
+    // 把路径偷偷解析回 `$HOME/.cc-switch/`——测试因此读到并写坏用户真实数据。
+    // 曾经踩过：model_pricing 的多个测试轮流往用户目录的 model-pricing.json 上
+    // 叠加写入，残留的 tombstone 让后续测试断言失败，而且每次跑都更糟。
+    #[cfg(windows)]
+    if crate::config::test_home_override_active() {
+        return default_dir;
+    }
     #[cfg(windows)]
     {
         let default_db = default_dir.join("cc-switch.db");
