@@ -19,14 +19,18 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # 仅构建 Windows x64（按需求裁剪发布矩阵）。
+        # 需要恢复全平台发布时，把下面三行恢复为：
+        #   include:
+        #     - os: windows-2022
+        #     - os: windows-11-arm
+        #       arch: arm64
+        #     - os: ubuntu-22.04
+        #     - os: ubuntu-22.04-arm
+        #       arch: arm64
+        #     - os: macos-14
         include:
           - os: windows-2022
-          - os: windows-11-arm
-            arch: arm64
-          - os: ubuntu-22.04
-          - os: ubuntu-22.04-arm
-            arch: arm64
-          - os: macos-14
 
     steps:
       - name: Checkout
