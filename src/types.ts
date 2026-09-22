@@ -28,6 +28,17 @@ export interface Provider {
   iconColor?: string; // 图标颜色（Hex 格式，如 "#00A67E"）
   // 是否加入故障转移队列
   inFailoverQueue?: boolean;
+  // 自定义文件夹/分组
+  folder?: string;
+}
+
+
+// 自定义供应商文件夹定义
+export interface ProviderFolder {
+  id: string;
+  name: string;
+  sortIndex?: number;
+  isExpanded?: boolean;
 }
 
 export interface AppConfig {
@@ -384,6 +395,14 @@ export interface Settings {
   commonConfigConfirmed?: boolean;
   // 首选语言（可选，默认中文）
   language?: "en" | "zh" | "zh-TW" | "ja";
+
+  // ===== TypeSafe System One (Jev) 智能分组 =====
+  // 注意：后端 get_settings_for_frontend 会清空 apiKey，前端拿到的是空串，
+  // 只能用来判断"配没配"，无法回显。真正是否已配请看
+  // providersApi.getFolderSuggestConfig().configured。
+  typesafeApiKey?: string;
+  typesafeBaseUrl?: string;
+  typesafeModel?: string;
 
   // 主页面显示的应用（默认全部显示）
   visibleApps?: VisibleApps;

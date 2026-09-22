@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
   Provider,
+  ProviderFolder,
   UniversalProvider,
   UniversalProvidersMap,
 } from "@/types";
@@ -23,6 +24,45 @@ export interface SwitchResult {
 
 export interface OpenTerminalOptions {
   cwd?: string;
+}
+
+// --- 智能分组（TypeSafe / Jev） ---
+
+export type SuggestionSource = "typesafe" | "heuristic";
+
+/** 单条归组建议。suggestedFolder 为 null 表示建议保持未分组。 */
+export interface FolderSuggestion {
+  providerId: string;
+  providerName: string;
+  suggestedFolder: string | null;
+  /** 0..1，Choice 概率分布的集中程度，不是"对不对"的保证 */
+  confidence: number;
+  /** 是否高置信度（>= 0.75），前端可据此默认勾选 */
+  highConfidence: boolean;
+  /** 全候选文件夹的概率分布（含未分组），按概率降序 */
+  alternatives: FolderProbability[];
+  source: SuggestionSource;
+}
+
+export interface FolderProbability {
+  /** null = 未分组 */
+  folder: string | null;
+  probability: number;
+}
+
+export interface FolderSuggestResult {
+  suggestions: FolderSuggestion[];
+  source: SuggestionSource;
+  /** 走了降级路径时的原因说明 */
+  degradedReason: string | null;
+  /** [prompt_tokens, completion_tokens]；走模型且有返回值时才有 */
+  usage: [number, number] | null;
+}
+
+export interface FolderSuggestConfigStatus {
+  configured: boolean;
+  baseUrl: string;
+  model: string;
 }
 
 export interface ClaudeDesktopStatus {
@@ -128,6 +168,103 @@ export const providersApi = {
     appId: AppId,
   ): Promise<boolean> {
     return await invoke("update_providers_sort_order", { updates, app: appId });
+  },
+
+  // --- 自定义文件夹 ---
+
+  /** 读取自定义文件夹注册表（已按 sortIndex 排序） */
+  async getFolders(appId: AppId): Promise<ProviderFolder[]> {
+    return await invoke("get_provider_folders", { app: appId });
+  },
+
+  /** 批量把若干供应商移入指定文件夹；folder 传 null/undefined 表示移到未分组 */
+  async setProvidersFolder(
+    providerIds: string[],
+    folder: string | null,
+    appId: AppId,
+  ): Promise<number> {
+    return await invoke("set_providers_folder", {
+      providerIds,
+      folder,
+      app: appId,
+    });
+  },
+
+  /** 新建文件夹，返回更新后的完整注册表 */
+  async createFolder(name: string, appId: AppId): Promise<ProviderFolder[]> {
+    return await invoke("create_provider_folder", { name, app: appId });
+  },
+
+  /** 重命名文件夹（供应商归组一并改），返回被改动的供应商数量 */
+  async renameFolder(
+    oldName: string,
+    newName: string,
+    appId: AppId,
+  ): Promise<number> {
+    return await invoke("rename_provider_folder", {
+      oldName,
+      newName,
+      app: appId,
+    });
+  },
+
+  /** 解散文件夹，归属供应商移到未分组，返回被移动的供应商数量 */
+  async deleteFolder(name: string, appId: AppId): Promise<number> {
+    return await invoke("delete_provider_folder", { name, app: appId });
+  },
+
+  /** 保存文件夹排序 */
+  async saveFoldersOrder(
+    folderNames: string[],
+    appId: AppId,
+  ): Promise<boolean> {
+    return await invoke("save_provider_folders_order", {
+      folderNames,
+      app: appId,
+    });
+  },
+
+  /** 保存单个文件夹的展开/收起状态 */
+  async setFolderExpanded(
+    name: string,
+    isExpanded: boolean,
+    appId: AppId,
+  ): Promise<boolean> {
+    return await invoke("set_provider_folder_expanded", {
+      name,
+      isExpanded,
+      app: appId,
+    });
+  },
+
+  // --- 智能分组（TypeSafe / Jev） ---
+
+  /** 读取智能分组配置状态（只暴露"配没配"，不含真 key） */
+  async getFolderSuggestConfig(): Promise<FolderSuggestConfigStatus> {
+    return await invoke("get_folder_suggest_config");
+  },
+
+  /**
+   * 保存 TypeSafe 配置。
+   * apiKey 传空/不传 = 保持现有 key 不变；clearApiKey=true 才真正清空。
+   */
+  async setFolderSuggestConfig(params: {
+    apiKey?: string;
+    baseUrl?: string;
+    model?: string;
+    clearApiKey?: boolean;
+  }): Promise<boolean> {
+    return await invoke("set_folder_suggest_config", {
+      apiKey: params.apiKey ?? null,
+      baseUrl: params.baseUrl ?? null,
+      model: params.model ?? null,
+      clearApiKey: params.clearApiKey ?? false,
+    });
+  },
+
+  /** 生成未分组供应商的文件夹归组建议（只返回建议，不落库） */
+  async suggestProviderFolders(appId: AppId): Promise<FolderSuggestResult> {
+    return await invoke("suggest_provider_folders", { app: appId });
   },
 
   async onSwitched(
