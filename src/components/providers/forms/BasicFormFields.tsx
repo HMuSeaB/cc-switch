@@ -22,16 +22,21 @@ import { IconPicker } from "@/components/IconPicker";
 import { getIconMetadata } from "@/icons/extracted/metadata";
 import type { UseFormReturn } from "react-hook-form";
 import type { ProviderFormData } from "@/lib/schemas/provider";
+import { FolderFormField } from "./FolderFormField";
+import type { AppId } from "@/lib/api";
 
 interface BasicFormFieldsProps {
   form: UseFormReturn<ProviderFormData>;
   /** Slot to render content between icon and name fields */
   beforeNameSlot?: ReactNode;
+  /** 应用标识，用于读取该 app 的自定义文件夹列表做补全 */
+  appId?: AppId;
 }
 
 export function BasicFormFields({
   form,
   beforeNameSlot,
+  appId,
 }: BasicFormFieldsProps) {
   const { t } = useTranslation();
   const [iconDialogOpen, setIconDialogOpen] = useState(false);
@@ -155,22 +160,54 @@ export function BasicFormFields({
         />
       </div>
 
-      <FormField
-        control={form.control}
-        name="websiteUrl"
-        render={({ field }) => (
-          <FormItem>
-            <FormLabel>{t("provider.websiteUrl")}</FormLabel>
-            <FormControl>
-              <Input
-                {...field}
-                placeholder={t("providerForm.websiteUrlPlaceholder")}
-              />
-            </FormControl>
-            <FormMessage />
-          </FormItem>
-        )}
-      />
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <FormField
+          control={form.control}
+          name="websiteUrl"
+          render={({ field }) => (
+            <FormItem>
+              <FormLabel>{t("provider.websiteUrl")}</FormLabel>
+              <FormControl>
+                <Input
+                  {...field}
+                  placeholder={t("providerForm.websiteUrlPlaceholder")}
+                />
+              </FormControl>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
+
+        <FormField
+          control={form.control}
+          name="folder"
+          render={({ field }) => (
+            <FormItem>
+              <FormLabel>
+                {t("provider.folderLabel", { defaultValue: "所属文件夹" })}
+              </FormLabel>
+              <FormControl>
+                {appId ? (
+                  <FolderFormField
+                    appId={appId}
+                    value={field.value || ""}
+                    onChange={field.onChange}
+                  />
+                ) : (
+                  <Input
+                    {...field}
+                    value={field.value || ""}
+                    placeholder={t("provider.folderPlaceholder", {
+                      defaultValue: "例如：主力官方、国内中转（留空为未分组）",
+                    })}
+                  />
+                )}
+              </FormControl>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
+      </div>
     </>
   );
 }

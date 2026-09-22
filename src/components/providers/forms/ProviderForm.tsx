@@ -236,6 +236,7 @@ export interface ProviderFormProps {
     meta?: ProviderMeta;
     icon?: string;
     iconColor?: string;
+      folder?: string;
   };
   showButtons?: boolean;
   isProxyTakeover?: boolean;
@@ -382,6 +383,7 @@ function ProviderFormFull({
       name: initialData?.name ?? "",
       websiteUrl: initialData?.websiteUrl ?? "",
       notes: initialData?.notes ?? "",
+      folder: initialData?.folder ?? "",
       settingsConfig: initialData?.settingsConfig
         ? JSON.stringify(initialData.settingsConfig, null, 2)
         : appId === "codex"
@@ -1974,6 +1976,7 @@ function ProviderFormFull({
 
           <BasicFormFields
             form={form}
+            appId={appId}
             beforeNameSlot={
               appId === "opencode" && !isAnyOmoCategory ? (
                 <div className="space-y-2">
