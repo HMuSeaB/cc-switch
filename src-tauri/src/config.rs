@@ -37,6 +37,7 @@ pub fn get_home_dir() -> PathBuf {
 ///
 /// 判定条件必须与 `get_home_dir` 完全一致，否则会出现"这里说没覆盖、那里却
 /// 已经用了临时目录"的割裂。
+#[allow(dead_code)]
 pub fn test_home_override_active() -> bool {
     std::env::var("CC_SWITCH_TEST_HOME")
         .map(|value| !value.trim().is_empty())
