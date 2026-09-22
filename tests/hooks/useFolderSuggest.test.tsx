@@ -6,7 +6,7 @@ import { useFolderSuggest } from "@/hooks/useFolderSuggest";
 
 const getConfigMock = vi.fn();
 const suggestMock = vi.fn();
-const setProvidersFolderMock = vi.fn();
+const setProvidersFolderEnsureMock = vi.fn();
 const setConfigMock = vi.fn();
 const toastSuccessMock = vi.fn();
 const toastErrorMock = vi.fn();
@@ -22,7 +22,7 @@ vi.mock("@/lib/api/providers", () => ({
   providersApi: {
     getFolderSuggestConfig: (...args: unknown[]) => getConfigMock(...args),
     suggestProviderFolders: (...args: unknown[]) => suggestMock(...args),
-    setProvidersFolder: (...args: unknown[]) => setProvidersFolderMock(...args),
+    setProvidersFolderEnsure: (...args: unknown[]) => setProvidersFolderEnsureMock(...args),
     setFolderSuggestConfig: (...args: unknown[]) => setConfigMock(...args),
   },
 }));
@@ -72,7 +72,7 @@ describe("useFolderSuggest", () => {
       degradedReason: null,
       usage: null,
     });
-    setProvidersFolderMock.mockResolvedValue(1);
+    setProvidersFolderEnsureMock.mockResolvedValue(1);
     setConfigMock.mockResolvedValue(true);
   });
 
@@ -104,25 +104,25 @@ describe("useFolderSuggest", () => {
     });
 
     // 4 条决定应合并成 3 次批量调用（两个"官方"合成一次）
-    expect(setProvidersFolderMock).toHaveBeenCalledTimes(3);
-    expect(setProvidersFolderMock).toHaveBeenCalledWith(
+    expect(setProvidersFolderEnsureMock).toHaveBeenCalledTimes(3);
+    expect(setProvidersFolderEnsureMock).toHaveBeenCalledWith(
       ["p1", "p2"],
       "官方",
       "claude",
     );
-    expect(setProvidersFolderMock).toHaveBeenCalledWith(
+    expect(setProvidersFolderEnsureMock).toHaveBeenCalledWith(
       ["p3"],
       "中转",
       "claude",
     );
     // 未分组也要发一次：用户可能把原本有分组的供应商改回未分组
-    expect(setProvidersFolderMock).toHaveBeenCalledWith(["p4"], null, "claude");
+    expect(setProvidersFolderEnsureMock).toHaveBeenCalledWith(["p4"], null, "claude");
 
     expect(toastSuccessMock).toHaveBeenCalled();
   });
 
   it("reports the total number of providers moved", async () => {
-    setProvidersFolderMock.mockResolvedValue(5);
+    setProvidersFolderEnsureMock.mockResolvedValue(5);
     const { wrapper } = createWrapper();
     const { result } = renderHook(() => useFolderSuggest("claude"), {
       wrapper,
@@ -140,7 +140,7 @@ describe("useFolderSuggest", () => {
   });
 
   it("surfaces apply failures as a toast", async () => {
-    setProvidersFolderMock.mockRejectedValue(new Error("数据库写入失败"));
+    setProvidersFolderEnsureMock.mockRejectedValue(new Error("数据库写入失败"));
     const { wrapper } = createWrapper();
     const { result } = renderHook(() => useFolderSuggest("claude"), {
       wrapper,

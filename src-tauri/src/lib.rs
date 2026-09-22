@@ -1324,6 +1324,7 @@ pub fn run() {
             commands::remove_provider_from_live_config,
             commands::get_provider_folders,
             commands::set_providers_folder,
+            commands::set_providers_folder_ensure,
             commands::create_provider_folder,
             commands::rename_provider_folder,
             commands::delete_provider_folder,

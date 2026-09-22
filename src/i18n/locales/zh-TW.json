@@ -173,7 +173,7 @@
     "folderSelectTarget": "選擇目標資料夾",
     "smartGroup": "智慧分組",
     "smartGroupTitle": "智慧分組",
-    "smartGroupDesc": "由 TypeSafe (Jev) 判斷每個未分組供應商該進哪個資料夾。建議僅供審查，確認後才會寫入。",
+    "smartGroupDesc": "由 TypeSafe (Jev) 判斷每個未分組供應商該進哪個資料夾。無可用資料夾時，會按供應商官網網域建議新分組。建議僅供審查，確認後才會寫入。",
     "smartGroupHint": "點擊下方按鈕，為目前未分組的供應商產生歸組建議。",
     "suggestGenerate": "產生建議",
     "suggestGenerating": "分析中...",
@@ -236,7 +236,9 @@
         "apiKeyPlaceholder": "請輸入 Gemini API Key"
       }
     },
-    "duplicateLiveIdsLoadFailed": "讀取設定中的供應商識別碼失敗，請先修復設定後再試"
+    "duplicateLiveIdsLoadFailed": "讀取設定中的供應商識別碼失敗，請先修復設定後再試",
+    "suggestNewFolder": "新增",
+    "suggestNewFolderHint": "這個資料夾還不存在，採用時會自動建立"
   },
   "claudeCode": {
     "needsRouting": "需要路由",

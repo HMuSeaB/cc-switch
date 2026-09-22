@@ -349,6 +349,10 @@ pub async fn suggest_provider_folders(
         .filter(|p| p.folder.as_deref().map(str::trim).unwrap_or("").is_empty())
         .collect();
 
+    // 从供应商自身的官网域名派生出候选新文件夹名。注册表是空的也不怕：
+    // 第一次用就能得到一批按域名归好的组，用户不必先手工建文件夹。
+    let derived = crate::services::folder_suggest::derive_folder_names_from_providers(&ungrouped);
+
     let settings = crate::settings::get_settings();
     let config = crate::services::typesafe::TypeSafeConfig {
         api_key: settings.typesafe_api_key.unwrap_or_default(),
@@ -366,10 +370,33 @@ pub async fn suggest_provider_folders(
         crate::services::folder_suggest::SuggestInput {
             ungrouped,
             existing_folders: existing,
+            derived_folders: derived,
             config,
         },
     )
     .await)
+}
+
+/// 批量把若干供应商移入（或移出，folder=None）指定文件夹，并确保该文件夹
+/// 已登记进注册表，**单事务**。
+///
+/// 与 `set_providers_folder` 的区别只在注册表。智能分组允许采纳"新文件夹"
+/// 建议（比如从供应商域名派生出、注册表里还没有的名字），走这个入口落库
+/// 才不会产出"管不了的孤儿分组"——界面能显示、能重命名、能解散。
+///
+/// 返回实际变更的供应商数量。
+#[tauri::command]
+pub fn set_providers_folder_ensure(
+    state: State<'_, AppState>,
+    app: String,
+    providerIds: Vec<String>,
+    folder: Option<String>,
+) -> Result<usize, String> {
+    let app_type = AppType::from_str(&app).map_err(|e| e.to_string())?;
+    state
+        .db
+        .set_providers_folder_ensure(app_type.as_str(), &providerIds, folder.as_deref())
+        .map_err(|e| e.to_string())
 }
 
 fn switch_provider_internal(

@@ -41,6 +41,9 @@ pub struct FolderSuggestion {
     /// 是否高置信度（>= [`HIGH_CONFIDENCE`]）。前端可据此默认勾选、
     /// 低置信度的默认不勾选，减少用户的审查负担。
     pub high_confidence: bool,
+    /// `suggested_folder` 是否指向一个**尚不存在**的文件夹（采纳时会新建）。
+    /// 前端据此给个"新建"标记，让用户清楚这条建议会创建分组。
+    pub is_new_folder: bool,
     /// 该供应商在全部候选文件夹上的概率分布（含 `__none__`），按概率降序。
     /// 给前端展示"第二选择是什么"，帮用户判断要不要改判。
     pub alternatives: Vec<FolderProbability>,
@@ -83,6 +86,14 @@ pub struct SuggestInput<'a> {
     pub ungrouped: Vec<&'a Provider>,
     /// 现有文件夹名（注册表 + 已占用名）
     pub existing_folders: Vec<String>,
+    /// 允许建议**新**文件夹时，从供应商地址派生出的候选名。
+    ///
+    /// 与 `existing_folders` 的关键区别：这些名字注册表里还没有，命中它们
+    /// 意味着"建一个新文件夹"。调用方（DAO）会用
+    /// `set_providers_folder_ensure` 在落库时补登记。
+    ///
+    /// 空 vec = 不允许建新文件夹（退化回旧的封闭候选集行为）。
+    pub derived_folders: Vec<String>,
     pub config: TypeSafeConfig,
 }
 
@@ -99,9 +110,21 @@ pub async fn suggest_folders(input: SuggestInput<'_>) -> FolderSuggestResult {
         };
     }
 
-    // 没有任何已存在的文件夹时，智能分组没有意义——硬让模型起名会产出一堆
-    // 用户没申请过的新分组。交给启发式也只会得到空结果，这里直接说明白。
-    if input.existing_folders.is_empty() {
+    // 候选集 = 已有文件夹 ∪ 派生的新文件夹名。
+    //
+    // 派生名不是让模型自由发挥：它们是从供应商自己的官网/请求地址里抽出来的，
+    // 集合封闭、可枚举，模型依然只能从给定选项里选。这样即使注册表是空的，
+    // 智能分组也有意义——第一次用就能得到一批按域名归好的组。
+    let mut candidates = input.existing_folders.clone();
+    for name in &input.derived_folders {
+        if !candidates.iter().any(|f| f == name) {
+            candidates.push(name.clone());
+        }
+    }
+
+    if candidates.is_empty() {
+        // 一个候选都没有（没有已有文件夹，也从地址里抽不出任何名字）：
+        // 这时候确实无能为力，说明白让用户先建一个。
         return FolderSuggestResult {
             suggestions: Vec::new(),
             source: SuggestionSource::Heuristic,
@@ -110,20 +133,26 @@ pub async fn suggest_folders(input: SuggestInput<'_>) -> FolderSuggestResult {
         };
     }
 
+    let new_folder_names: Vec<String> = candidates
+        .iter()
+        .filter(|c| !input.existing_folders.iter().any(|f| f == *c))
+        .cloned()
+        .collect();
+
     if !input.config.is_configured() {
         return degraded(
-            heuristic_suggest(&input.ungrouped, &input.existing_folders),
+            heuristic_suggest(&input.ungrouped, &candidates),
             "未配置 TypeSafe API Key，已使用本地启发式".to_string(),
         );
     }
 
     let client = TypeSafeClient::new(input.config.clone());
-    match typesafe_suggest(&client, &input.ungrouped, &input.existing_folders).await {
+    match typesafe_suggest(&client, &input.ungrouped, &candidates, &new_folder_names).await {
         Ok(result) => result,
         Err(err) => {
             log::warn!("[FolderSuggest] TypeSafe 调用失败，降级到本地启发式: {err}");
             degraded(
-                heuristic_suggest(&input.ungrouped, &input.existing_folders),
+                heuristic_suggest(&input.ungrouped, &candidates),
                 format!("TypeSafe 调用失败，已使用本地启发式: {err}"),
             )
         }
@@ -140,24 +169,35 @@ fn degraded(suggestions: Vec<FolderSuggestion>, reason: String) -> FolderSuggest
 }
 
 /// 走 TypeSafe 的一次性判定。
+///
+/// `candidates` 是完整的封闭选项集（已有 ∪ 派生），模型只能从中选；
+/// `new_folder_names` 是其中"注册表里还没有"的那部分，仅用于给建议打
+/// `is_new_folder` 标记，不参与请求构造。
 async fn typesafe_suggest(
     client: &TypeSafeClient,
     ungrouped: &[&Provider],
-    existing_folders: &[String],
+    candidates: &[String],
+    new_folder_names: &[String],
 ) -> Result<FolderSuggestResult, String> {
     // criteria：选项 id -> 该选项的含义。
-    // 每个真实文件夹一个选项；`__none__` 永远在最后，语义写清楚"不属于任何一组"。
+    // 每个候选文件夹一个选项；`__none__` 永远在最后，语义写清楚"不属于任何一组"。
     let mut criteria: IndexMap<String, String> = IndexMap::new();
-    for name in existing_folders {
-        criteria.insert(name.clone(), format!("文件夹「{name}」"));
+    for name in candidates {
+        // 派生名在注册表里还不存在，含义里点明"这将新建一个文件夹"，
+        // 免得模型以为它和已有文件夹是同一类东西而不敢选。
+        if new_folder_names.iter().any(|n| n == name) {
+            criteria.insert(name.clone(), format!("新文件夹「{name}」（采纳时会创建）"));
+        } else {
+            criteria.insert(name.clone(), format!("文件夹「{name}」"));
+        }
     }
     criteria.insert(
         NONE_OPTION_ID.to_string(),
         "不属于以上任何一个文件夹，保持未分组".to_string(),
     );
 
-    let instructions = build_instructions(ungrouped, existing_folders);
-    let state = build_state(ungrouped, existing_folders);
+    let instructions = build_instructions(ungrouped, candidates);
+    let state = build_state(ungrouped, candidates, new_folder_names);
 
     // question id 用 provider id；同一次请求里并行发出
     let keys: Vec<String> = ungrouped.iter().map(|p| p.id.clone()).collect();
@@ -175,7 +215,12 @@ async fn typesafe_suggest(
         };
         any_answered = true;
 
-        suggestions.push(build_suggestion(provider, choice, existing_folders));
+        suggestions.push(build_suggestion(
+            provider,
+            choice,
+            candidates,
+            new_folder_names,
+        ));
     }
 
     // 一个答案都没回来，说明响应结构和预期不符——当作失败降级，别给用户看空列表
@@ -194,7 +239,8 @@ async fn typesafe_suggest(
 fn build_suggestion(
     provider: &Provider,
     choice: &ChoiceResult,
-    existing_folders: &[String],
+    candidates: &[String],
+    new_folder_names: &[String],
 ) -> FolderSuggestion {
     let is_none = choice.selected == NONE_OPTION_ID;
     let suggested_folder = if is_none {
@@ -225,7 +271,7 @@ fn build_suggestion(
     // 模型有时会返回一个不在候选里的名字（幻觉）。这种建议不可信：
     // 归一成"未分组"并把置信度压到低档，让用户看出来有问题。
     let (suggested_folder, confidence) = match &suggested_folder {
-        Some(name) if !existing_folders.iter().any(|f| f == name) => {
+        Some(name) if !candidates.iter().any(|f| f == name) => {
             log::warn!(
                 "[FolderSuggest] 模型返回了不存在的文件夹「{name}」，按未分组处理: provider={}",
                 provider.id
@@ -235,12 +281,18 @@ fn build_suggestion(
         _ => (suggested_folder, choice.confidence),
     };
 
+    // 采纳这条建议会不会新建文件夹：命中的是派生名（注册表里还没有）。
+    let is_new_folder = suggested_folder
+        .as_ref()
+        .is_some_and(|f| new_folder_names.iter().any(|n| n == f));
+
     FolderSuggestion {
         provider_id: provider.id.clone(),
         provider_name: provider.name.clone(),
         suggested_folder,
         confidence,
         high_confidence: confidence >= HIGH_CONFIDENCE,
+        is_new_folder,
         alternatives,
         source: SuggestionSource::TypeSafe,
     }
@@ -342,14 +394,141 @@ fn extract_base_url(provider: &Provider) -> Option<String> {
     None
 }
 
+/// 从一组未分组供应商自身派生出候选文件夹名。
+///
+/// 这是"注册表是空的也能用智能分组"的关键：名字不是模型编的，是从供应商
+/// 自己的官网/请求地址里抽出来的域名根。抽出来的是封闭集合，模型照样只能
+/// 从给定选项里选，所以幻觉风险没有变化。
+///
+/// 刻意做成保守：
+/// - **只用官网域名**（`website_url`），不用 `settings_config` 里的 base_url。
+///   后者对中转/代理用户来说全是 `127.0.0.1:4000` 这类地址，拿它建组会得到
+///   一个叫"127.0.0.1"的文件夹，毫无意义。
+/// - **IP / localhost 一律跳过**：同理，本地中转地址不构成"服务商"。
+/// - **只保留 >= 2 个供应商共用的域名根**：只出现一次的域名建单个文件夹，
+///   只会让文件夹列表更长而没有任何分组收益。这些保持未分组更干净。
+/// - 返回结果按组内供应商数降序，让"大组"先出现在候选里。
+pub fn derive_folder_names_from_providers(ungrouped: &[&Provider]) -> Vec<String> {
+    use std::collections::HashMap;
+
+    // 域名根 -> 落在它上面的供应商 id（用 Vec 保序去重，不用 HashSet 打乱顺序）
+    let mut groups: HashMap<String, Vec<String>> = HashMap::new();
+    for provider in ungrouped {
+        let Some(root) = provider.website_url.as_deref().and_then(domain_root_of) else {
+            continue;
+        };
+        let entry = groups.entry(root).or_default();
+        if !entry.iter().any(|id| id == &provider.id) {
+            entry.push(provider.id.clone());
+        }
+    }
+
+    // >= 2 个才算一个候选文件夹，避免为单个供应商建一堆空壳组
+    let mut derived: Vec<(String, usize)> = groups
+        .into_iter()
+        .filter(|(_, ids)| ids.len() >= 2)
+        .map(|(root, ids)| (root, ids.len()))
+        .collect();
+
+    derived.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    derived.into_iter().map(|(root, _)| root).collect()
+}
+
+/// 从一个 URL 里抽"域名根"作为文件夹名。返回 None 表示这个 URL 不该建组。
+///
+/// 规则：
+/// - 解析不出 host → None
+/// - `localhost` / 字面 IP（v4/v6）→ None（本地中转，不是服务商）
+/// - 取可注册域名级别的最后两段，`www.` 前缀剥掉
+/// - 结果统一转小写
+fn domain_root_of(url: &str) -> Option<String> {
+    let trimmed = url.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    // 浅抽 host：scheme://host[:port][/path]。不引完整 URL 解析器——这里的
+    // 输入几乎都是用户手填的 URL，畸形是常态，抽不到就跳过。
+    let after_scheme = match trimmed.split_once("://") {
+        Some((_, rest)) => rest,
+        None => trimmed,
+    };
+    let host_port = after_scheme
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or(after_scheme);
+    // 去掉 userinfo（http://user:pass@host/）——账号密码里出现 @ 是合法的
+    let host = host_port.rsplit('@').next().unwrap_or(host_port);
+    // 去掉端口；IPv6 字面量形如 [::1]:8080，先剥方括号
+    let host = host
+        .strip_prefix('[')
+        .map_or(host, |h| h.split(']').next().unwrap_or(h));
+    let host = host.split(':').next().unwrap_or(host);
+
+    if host.is_empty() || host.eq_ignore_ascii_case("localhost") {
+        return None;
+    }
+
+    // 字面 IPv4：四段全数字
+    let is_ipv4 = host.split('.').count() == 4
+        && host
+            .split('.')
+            .all(|seg| !seg.is_empty() && seg.bytes().all(|b| b.is_ascii_digit()));
+    if is_ipv4 || host.contains(':') {
+        return None;
+    }
+
+    let labels: Vec<&str> = host.split('.').filter(|s| !s.is_empty()).collect();
+    match labels.len() {
+        0 | 1 => None,
+        2 => Some(labels.join(".")),
+        _ => {
+            // 处理 co.uk / com.cn 这类二级后缀：再多往前取一段，
+            // 否则 "api.example.co.uk" 会退化成 "co.uk"，把不同服务商混到一起。
+            let take = if labels[labels.len() - 2].len() <= 3 {
+                3
+            } else {
+                2
+            };
+            Some(labels[labels.len() - take..].join("."))
+        }
+    }
+    .map(|s| s.to_lowercase())
+}
+
 /// 组装 state：命名 JSON 字段，让模型看到结构化上下文而不只是一段话。
-fn build_state(ungrouped: &[&Provider], existing_folders: &[String]) -> serde_json::Value {
+///
+/// `new_folder_names` 非空时，constraints 从"不能发明新文件夹"改成
+/// "优先归入已有文件夹，确实都不合适才从给出的新候选里挑"，并把这些候选
+/// 单独列出来。集合依然是封闭的——模型只能选列出的名字。
+fn build_state(
+    ungrouped: &[&Provider],
+    candidates: &[String],
+    new_folder_names: &[String],
+) -> serde_json::Value {
+    let constraints: Vec<String> = if new_folder_names.is_empty() {
+        vec![
+            "只能选择给出的文件夹名，不能发明新文件夹".to_string(),
+            "明显不属于任何一组的选未分组，不要勉强归类".to_string(),
+            "同一性质的供应商应保持分组一致".to_string(),
+        ]
+    } else {
+        vec![
+            "优先归入已存在的文件夹，不要轻易新建".to_string(),
+            "确实不属于任何已有文件夹时，才从 new_folder_candidates 里挑一个".to_string(),
+            "同一性质的供应商应保持分组一致（包括新建的那个）".to_string(),
+            "只能选择给出的文件夹名，不能自己编造名字".to_string(),
+            "明显不属于任何一组的选未分组，不要勉强归类".to_string(),
+        ]
+    };
+
     serde_json::json!({
         "project": "cc-switch",
-        "goal": "把未分组的供应商归入最合适的已有文件夹",
+        "goal": "把未分组的供应商归入最合适的文件夹",
         "context": {
             "ungrouped_count": ungrouped.len(),
-            "existing_folders": existing_folders,
+            "existing_folders": candidates,
+            "new_folder_candidates": new_folder_names,
             "providers": ungrouped.iter().map(|p| serde_json::json!({
                 "id": p.id,
                 "name": p.name,
@@ -359,11 +538,7 @@ fn build_state(ungrouped: &[&Provider], existing_folders: &[String]) -> serde_js
                 "notes": p.notes,
             })).collect::<Vec<_>>(),
         },
-        "constraints": [
-            "只能选择给出的文件夹名，不能发明新文件夹",
-            "明显不属于任何一组的选未分组，不要勉强归类",
-            "同一性质的供应商应保持分组一致",
-        ],
+        "constraints": constraints,
     })
 }
 
@@ -414,6 +589,7 @@ fn heuristic_suggest(
             suggested_folder,
             confidence,
             high_confidence: confidence >= HIGH_CONFIDENCE,
+            is_new_folder: false,
             alternatives: Vec::new(),
             source: SuggestionSource::Heuristic,
         });
@@ -575,6 +751,7 @@ mod tests {
         let result = suggest_folders(SuggestInput {
             ungrouped: Vec::new(),
             existing_folders: vec!["官方".to_string()],
+            derived_folders: Vec::new(),
             config: TypeSafeConfig {
                 api_key: String::new(),
                 base_url: String::new(),
@@ -587,11 +764,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn suggest_folders_requires_existing_folders() {
+    async fn suggest_folders_degrades_when_no_candidates_at_all() {
+        // 注册表空 + 从地址里也抽不出任何候选（这里的 provider 没官网地址），
+        // 才真的无能为力——提示用户先建文件夹
         let p = provider("p1", "X", None);
         let result = suggest_folders(SuggestInput {
             ungrouped: vec![&p],
             existing_folders: Vec::new(),
+            derived_folders: Vec::new(),
             config: TypeSafeConfig {
                 api_key: "k".to_string(),
                 base_url: String::new(),
@@ -601,6 +781,33 @@ mod tests {
         .await;
         assert!(result.suggestions.is_empty());
         assert_eq!(result.source, SuggestionSource::Heuristic);
+        assert!(result.degraded_reason.unwrap().contains("请先新建文件夹"));
+    }
+
+    #[tokio::test]
+    async fn suggest_folders_works_from_derived_folders_on_empty_registry() {
+        // 注册表是空的，但派生出一个候选名：本地启发式应能按域名关键词命中它，
+        // 而不是返回"请先新建文件夹"。这是空注册表上首次使用的关键路径。
+        let mut p = provider("p1", "DeepSeek 官方", None);
+        p.website_url = Some("https://www.deepseek.com".to_string());
+        let result = suggest_folders(SuggestInput {
+            ungrouped: vec![&p],
+            existing_folders: Vec::new(),
+            derived_folders: vec!["deepseek.com".to_string()],
+            config: TypeSafeConfig {
+                api_key: String::new(), // 无 key → 走启发式
+                base_url: String::new(),
+                model: String::new(),
+            },
+        })
+        .await;
+
+        assert_eq!(result.source, SuggestionSource::Heuristic);
+        assert_eq!(
+            result.suggestions[0].suggested_folder.as_deref(),
+            Some("deepseek.com"),
+            "派生的候选名应能作为启发式的匹配目标"
+        );
     }
 
     #[tokio::test]
@@ -609,6 +816,7 @@ mod tests {
         let result = suggest_folders(SuggestInput {
             ungrouped: vec![&p],
             existing_folders: vec!["官方".to_string()],
+            derived_folders: Vec::new(),
             config: TypeSafeConfig {
                 api_key: String::new(),
                 base_url: String::new(),
@@ -623,5 +831,101 @@ mod tests {
             Some("官方")
         );
         assert!(result.degraded_reason.unwrap().contains("API Key"));
+    }
+
+    #[test]
+    fn domain_root_of_extracts_registrable_domain() {
+        assert_eq!(
+            domain_root_of("https://www.deepseek.com").as_deref(),
+            Some("deepseek.com")
+        );
+        assert_eq!(
+            domain_root_of("https://api.deepseek.com/v1/chat").as_deref(),
+            Some("deepseek.com")
+        );
+        assert_eq!(
+            domain_root_of("integrate.api.nvidia.com").as_deref(),
+            Some("nvidia.com"),
+            "三段以上的域名应取后两段"
+        );
+        assert_eq!(
+            domain_root_of("http://user:pass@api.example.io:8080/x").as_deref(),
+            Some("example.io"),
+            "userinfo 和端口都要剥掉"
+        );
+        // 大小写归一
+        assert_eq!(
+            domain_root_of("https://WWW.Example.COM").as_deref(),
+            Some("example.com")
+        );
+        // 二级后缀（.co.uk 这类）：往前多取一段，否则会退化成 "co.uk"
+        assert_eq!(
+            domain_root_of("https://api.example.co.uk").as_deref(),
+            Some("example.co.uk")
+        );
+    }
+
+    #[test]
+    fn domain_root_of_rejects_local_and_malformed() {
+        assert_eq!(domain_root_of("http://127.0.0.1:8045"), None);
+        assert_eq!(domain_root_of("http://192.168.1.10/admin"), None);
+        assert_eq!(domain_root_of("http://localhost:3000"), None);
+        assert_eq!(domain_root_of("http://[::1]:8080"), None);
+        assert_eq!(domain_root_of(""), None);
+        assert_eq!(domain_root_of("   "), None);
+        assert_eq!(domain_root_of("http://"), None);
+    }
+
+    #[test]
+    fn derive_folder_names_requires_two_providers_sharing_a_domain() {
+        // 两个同域 + 一个本地 IP + 一个独有域名
+        let a = provider("a", "A", None);
+        let mut b = provider("b", "B", None);
+        b.website_url = Some("https://www.nvidia.com".to_string());
+        let mut c = provider("c", "C", None);
+        c.website_url = Some("https://integrate.api.nvidia.com".to_string());
+        let mut d = provider("d", "D", None);
+        d.website_url = Some("http://127.0.0.1:4000".to_string());
+        let mut e = provider("e", "E", None);
+        e.website_url = Some("https://lonely.example.net".to_string());
+
+        let derived = derive_folder_names_from_providers(&[&a, &b, &c, &d, &e]);
+
+        assert_eq!(
+            derived,
+            vec!["nvidia.com".to_string()],
+            "只保留 >=2 个供应商共用的域名；本地 IP 和独有域名都不建组"
+        );
+    }
+
+    #[test]
+    fn derive_folder_names_orders_by_group_size_desc() {
+        let mut nvidia = Vec::new();
+        for i in 0..3 {
+            let mut p = provider(&format!("n{i}"), "N", None);
+            p.website_url = Some(format!("https://site{i}.nvidia.com"));
+            nvidia.push(p);
+        }
+        let mut or = Vec::new();
+        for i in 0..2 {
+            let mut p = provider(&format!("o{i}"), "O", None);
+            p.website_url = Some(format!("https://site{i}.openrouter.ai"));
+            or.push(p);
+        }
+        let all: Vec<&Provider> = nvidia.iter().chain(or.iter()).collect();
+
+        let derived = derive_folder_names_from_providers(&all);
+        assert_eq!(
+            derived,
+            vec!["nvidia.com".to_string(), "openrouter.ai".to_string()],
+            "大组应排在前面"
+        );
+    }
+
+    #[test]
+    fn derive_folder_names_ignores_providers_without_website() {
+        let a = provider("a", "A", None);
+        let b = provider("b", "B", Some("https://127.0.0.1:4000"));
+        assert!(derive_folder_names_from_providers(&[&a, &b]).is_empty());
     }
 }

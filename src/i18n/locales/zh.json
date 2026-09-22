@@ -173,7 +173,7 @@
     "folderSelectTarget": "选择目标文件夹",
     "smartGroup": "智能分组",
     "smartGroupTitle": "智能分组",
-    "smartGroupDesc": "由 TypeSafe (Jev) 判断每个未分组供应商该进哪个文件夹。建议仅供审查，确认后才会写入。",
+    "smartGroupDesc": "由 TypeSafe (Jev) 判断每个未分组供应商该进哪个文件夹。无可用文件夹时，会按供应商官网域名建议新分组。建议仅供审查，确认后才会写入。",
     "smartGroupHint": "点击下方按钮，为当前未分组的供应商生成归组建议。",
     "suggestGenerate": "生成建议",
     "suggestGenerating": "分析中...",
@@ -236,7 +236,9 @@
         "apiKeyPlaceholder": "请输入 Gemini API Key"
       }
     },
-    "duplicateLiveIdsLoadFailed": "读取配置中的供应商标识失败，请先修复配置后再试"
+    "duplicateLiveIdsLoadFailed": "读取配置中的供应商标识失败，请先修复配置后再试",
+    "suggestNewFolder": "新建",
+    "suggestNewFolderHint": "这个文件夹还不存在，采纳时会自动创建"
   },
   "claudeCode": {
     "needsRouting": "需要路由",

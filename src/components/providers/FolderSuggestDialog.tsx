@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { AlertTriangle, Check, Folder, Loader2, Sparkles } from "lucide-react";
+import { AlertTriangle, Check, Folder, FolderPlus, Loader2, Sparkles } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -53,6 +53,30 @@ export function FolderSuggestDialog({
   const [checked, setChecked] = useState<Record<string, boolean>>({});
 
   const result: FolderSuggestResult | undefined = suggest.data;
+
+  /**
+   * 下拉框可用全部文件夹名的汇总，按概率/出现次序去重。
+   *
+   * 为什么不能只列 `s.alternatives`：走本地启发式降级时后端不下发 alternatives，
+   * 那样下拉框就只剩"未分组"一项，用户想改判成别的文件夹时无从下手。
+   * 这里把所有建议里出现过的文件夹名并进来，保证任何路径下都能改判。
+   */
+  const allFolders = useMemo(() => {
+    const names: string[] = [];
+    if (result) {
+      for (const s of result.suggestions) {
+        if (s.suggestedFolder && !names.includes(s.suggestedFolder)) {
+          names.push(s.suggestedFolder);
+        }
+        for (const a of s.alternatives) {
+          if (a.folder && !names.includes(a.folder)) {
+            names.push(a.folder);
+          }
+        }
+      }
+    }
+    return names;
+  }, [result]);
 
   // 新结果到达时按规则初始化默认勾选与决定
   useEffect(() => {
@@ -236,13 +260,19 @@ export function FolderSuggestDialog({
                               defaultValue: "未分组",
                             })}
                           </option>
-                          {s.alternatives
-                            .filter((a) => a.folder !== null)
-                            .map((a) => (
-                              <option key={a.folder!} value={a.folder!}>
-                                {a.folder}
+                          {/* 目标文件夹在下拉里，名字后面标注它是新建的 */}
+                          {allFolders.map((name) => {
+                            const isNew =
+                              result?.suggestions.some(
+                                (s) =>
+                                  s.suggestedFolder === name && s.isNewFolder,
+                              ) ?? false;
+                            return (
+                              <option key={name} value={name}>
+                                {isNew ? `${name} (${t("provider.suggestNewFolder", { defaultValue: "新建" })})` : name}
                               </option>
-                            ))}
+                            );
+                          })}
                         </select>
                         {s.highConfidence && s.suggestedFolder && (
                           <Badge
@@ -252,6 +282,20 @@ export function FolderSuggestDialog({
                             <Check className="w-2.5 h-2.5" />
                             {t("provider.suggestHighConfidence", {
                               defaultValue: "高置信",
+                            })}
+                          </Badge>
+                        )}
+                        {s.isNewFolder && s.suggestedFolder && (
+                          <Badge
+                            variant="secondary"
+                            className="h-5 shrink-0 gap-1 px-1.5 text-[10px] font-normal bg-blue-500/10 text-blue-600 dark:text-blue-400 border-blue-500/20"
+                            title={t("provider.suggestNewFolderHint", {
+                              defaultValue: "这个文件夹还不存在，采纳时会自动创建",
+                            })}
+                          >
+                            <FolderPlus className="w-2.5 h-2.5" />
+                            {t("provider.suggestNewFolder", {
+                              defaultValue: "新建",
                             })}
                           </Badge>
                         )}

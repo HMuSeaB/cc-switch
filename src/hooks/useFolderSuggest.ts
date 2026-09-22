@@ -83,7 +83,9 @@ export function useFolderSuggest(appId: AppId) {
 
       let moved = 0;
       for (const [folder, providerIds] of byFolder) {
-        moved += await providersApi.setProvidersFolder(
+        // 走 ensure 变体：采纳"新文件夹"建议时会自动登记进注册表，
+        // 否则界面会出现能显示但不能重命名/解散的孤儿分组。
+        moved += await providersApi.setProvidersFolderEnsure(
           providerIds,
           folder,
           appId,

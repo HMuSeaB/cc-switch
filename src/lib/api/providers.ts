@@ -39,6 +39,8 @@ export interface FolderSuggestion {
   confidence: number;
   /** 是否高置信度（>= 0.75），前端可据此默认勾选 */
   highConfidence: boolean;
+  /** suggestedFolder 是否指向一个尚不存在的文件夹（采纳时会新建） */
+  isNewFolder: boolean;
   /** 全候选文件夹的概率分布（含未分组），按概率降序 */
   alternatives: FolderProbability[];
   source: SuggestionSource;
@@ -184,6 +186,24 @@ export const providersApi = {
     appId: AppId,
   ): Promise<number> {
     return await invoke("set_providers_folder", {
+      providerIds,
+      folder,
+      app: appId,
+    });
+  },
+
+  /**
+   * 批量把若干供应商移入指定文件夹，并确保该文件夹已登记进注册表（单事务）。
+   *
+   * 与 `setProvidersFolder` 的区别：智能分组允许采纳"新文件夹"建议，
+   * 走这个入口落库才不会产出管不了的孤儿分组。
+   */
+  async setProvidersFolderEnsure(
+    providerIds: string[],
+    folder: string | null,
+    appId: AppId,
+  ): Promise<number> {
+    return await invoke("set_providers_folder_ensure", {
       providerIds,
       folder,
       app: appId,

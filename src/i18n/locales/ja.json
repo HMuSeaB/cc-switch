@@ -173,7 +173,7 @@
     "folderSelectTarget": "移動先フォルダーを選択",
     "smartGroup": "スマートグルーピング",
     "smartGroupTitle": "スマートグルーピング",
-    "smartGroupDesc": "TypeSafe (Jev) が各未分组プロバイダーの所属フォルダーを判定します。提案は確認用で、承認後にのみ書き込まれます。",
+    "smartGroupDesc": "TypeSafe (Jev) が未分组のプロバイダーごとに最適なフォルダーを判定します。既存フォルダーに合わない場合は、プロバイダーのドメインから新規フォルダーを提案します。提案は確認のみで、採用するまで書き込みません。",
     "smartGroupHint": "下のボタンをクリックして、未分组プロバイダーの归组提案を生成します。",
     "suggestGenerate": "提案を生成",
     "suggestGenerating": "分析中...",
@@ -236,7 +236,9 @@
         "apiKeyPlaceholder": "Gemini API Key を入力"
       }
     },
-    "duplicateLiveIdsLoadFailed": "設定内のプロバイダー識別子を読み込めませんでした。設定を修正してから再度お試しください"
+    "duplicateLiveIdsLoadFailed": "設定内のプロバイダー識別子を読み込めませんでした。設定を修正してから再度お試しください",
+    "suggestNewFolder": "新規",
+    "suggestNewFolderHint": "このフォルダーはまだ存在しません。採用時に自動作成されます"
   },
   "claudeCode": {
     "needsRouting": "ルーティングが必要",

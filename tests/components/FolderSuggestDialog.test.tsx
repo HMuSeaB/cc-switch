@@ -21,7 +21,7 @@ import type { FolderSuggestResult } from "@/lib/api/providers";
 
 const getConfigMock = vi.fn();
 const suggestMock = vi.fn();
-const setProvidersFolderMock = vi.fn();
+const setProvidersFolderEnsureMock = vi.fn();
 const setConfigMock = vi.fn();
 const toastSuccessMock = vi.fn();
 const toastErrorMock = vi.fn();
@@ -37,7 +37,7 @@ vi.mock("@/lib/api/providers", () => ({
   providersApi: {
     getFolderSuggestConfig: (...args: unknown[]) => getConfigMock(...args),
     suggestProviderFolders: (...args: unknown[]) => suggestMock(...args),
-    setProvidersFolder: (...args: unknown[]) => setProvidersFolderMock(...args),
+    setProvidersFolderEnsure: (...args: unknown[]) => setProvidersFolderEnsureMock(...args),
     setFolderSuggestConfig: (...args: unknown[]) => setConfigMock(...args),
   },
 }));
@@ -114,7 +114,7 @@ describe("FolderSuggestDialog", () => {
       baseUrl: "https://api.typesafe.ai/v1",
       model: "jev-latest",
     });
-    setProvidersFolderMock.mockResolvedValue(1);
+    setProvidersFolderEnsureMock.mockResolvedValue(1);
   });
 
   it("shows the generate prompt before any suggestion exists", async () => {
@@ -146,6 +146,7 @@ describe("FolderSuggestDialog", () => {
           providerName: "高置信供应商",
           suggestedFolder: "官方",
           confidence: 0.9,
+          isNewFolder: false,
           highConfidence: true,
           alternatives: [{ folder: "官方", probability: 0.9 }],
           source: "typesafe",
@@ -155,6 +156,7 @@ describe("FolderSuggestDialog", () => {
           providerName: "低置信供应商",
           suggestedFolder: "中转",
           confidence: 0.4,
+          isNewFolder: false,
           highConfidence: false,
           alternatives: [{ folder: "中转", probability: 0.4 }],
           source: "typesafe",
@@ -187,6 +189,7 @@ describe("FolderSuggestDialog", () => {
           providerName: "无家可归",
           suggestedFolder: null,
           confidence: 0.95,
+          isNewFolder: false,
           highConfidence: true,
           alternatives: [{ folder: null, probability: 0.95 }],
           source: "typesafe",
@@ -210,6 +213,7 @@ describe("FolderSuggestDialog", () => {
           providerName: "供应商A",
           suggestedFolder: "官方",
           confidence: 0.9,
+          isNewFolder: false,
           highConfidence: true,
           alternatives: [{ folder: "官方", probability: 0.9 }],
           source: "typesafe",
@@ -219,6 +223,7 @@ describe("FolderSuggestDialog", () => {
           providerName: "供应商B",
           suggestedFolder: "中转",
           confidence: 0.9,
+          isNewFolder: false,
           highConfidence: true,
           alternatives: [{ folder: "中转", probability: 0.9 }],
           source: "typesafe",
@@ -237,10 +242,10 @@ describe("FolderSuggestDialog", () => {
 
     fireEvent.click(screen.getByText("应用所选"));
 
-    await waitFor(() => expect(setProvidersFolderMock).toHaveBeenCalled());
+    await waitFor(() => expect(setProvidersFolderEnsureMock).toHaveBeenCalled());
     // 只该发一次调用，且只含 p1
-    expect(setProvidersFolderMock).toHaveBeenCalledTimes(1);
-    expect(setProvidersFolderMock).toHaveBeenCalledWith(
+    expect(setProvidersFolderEnsureMock).toHaveBeenCalledTimes(1);
+    expect(setProvidersFolderEnsureMock).toHaveBeenCalledWith(
       ["p1"],
       "官方",
       "claude",
@@ -255,6 +260,7 @@ describe("FolderSuggestDialog", () => {
           providerName: "可改判",
           suggestedFolder: "官方",
           confidence: 0.6,
+          isNewFolder: false,
           highConfidence: false,
           alternatives: [
             { folder: "官方", probability: 0.6 },
@@ -278,16 +284,93 @@ describe("FolderSuggestDialog", () => {
     fireEvent.click(within(row as HTMLElement).getByRole("checkbox"));
     fireEvent.click(screen.getByText("应用所选"));
 
-    await waitFor(() => expect(setProvidersFolderMock).toHaveBeenCalled());
-    expect(setProvidersFolderMock).toHaveBeenCalledWith(
+    await waitFor(() => expect(setProvidersFolderEnsureMock).toHaveBeenCalled());
+    expect(setProvidersFolderEnsureMock).toHaveBeenCalledWith(
       ["p1"],
       "中转",
       "claude",
     );
   });
 
-  it("explains why it degraded to the heuristic path", async () => {
+  it("marks a new-folder suggestion and applies it through the ensure path", async () => {
+    // 空注册表场景：后端从供应商域名派生出新候选名，标记为"新建"
     suggestMock.mockResolvedValue(
+      result([
+        {
+          providerId: "p1",
+          providerName: "DeepSeek 一号",
+          suggestedFolder: "deepseek.com",
+          confidence: 0.88,
+          isNewFolder: true,
+          highConfidence: true,
+          alternatives: [{ folder: "deepseek.com", probability: 0.88 }],
+          source: "typesafe",
+        },
+      ]),
+    );
+
+    renderDialog();
+
+    fireEvent.click(await screen.findByText("生成建议"));
+
+    // "新建"徽标要出现，让用户知道这条建议会创建文件夹
+    expect(await screen.findByText("新建")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByText("应用所选"));
+
+    await waitFor(() => expect(setProvidersFolderEnsureMock).toHaveBeenCalled());
+    // 必须走 ensure 变体，否则新文件夹不会登记进注册表（变成管不了的孤儿分组）
+    expect(setProvidersFolderEnsureMock).toHaveBeenCalledWith(
+      ["p1"],
+      "deepseek.com",
+      "claude",
+    );
+  });
+
+  it("offers every seen folder in the select even on the heuristic path", async () => {
+    // 本地启发式不下发 alternatives，下拉框不能因此只剩"未分组"
+    suggestMock.mockResolvedValue(
+      result(
+        [
+          {
+            providerId: "p1",
+            providerName: "命中域名",
+            suggestedFolder: "nvidia.com",
+            confidence: 0.6,
+            isNewFolder: true,
+            highConfidence: false,
+            alternatives: [],
+            source: "heuristic",
+          },
+          {
+            providerId: "p2",
+            providerName: "换个组",
+            suggestedFolder: "nvidia.com",
+            confidence: 0.5,
+            isNewFolder: true,
+            highConfidence: false,
+            alternatives: [],
+            source: "heuristic",
+          },
+        ],
+        { source: "heuristic", degradedReason: "未配置 TypeSafe API Key" },
+      ),
+    );
+
+    renderDialog();
+
+    fireEvent.click(await screen.findByText("生成建议"));
+    await screen.findByText("命中域名");
+
+    const row = screen.getByText("换个组").closest("div.rounded-xl");
+    const select = within(row as HTMLElement).getByRole("combobox");
+    // 即使没有 alternatives，也能选到别处出现过的文件夹名
+    expect(
+      within(select).getByRole("option", { name: /nvidia\.com/ }),
+    ).toBeInTheDocument();
+  });
+
+  it("explains why it degraded to the heuristic path", async () => {    suggestMock.mockResolvedValue(
       result([], {
         source: "heuristic",
         degradedReason: "TypeSafe 调用失败，已使用本地启发式",

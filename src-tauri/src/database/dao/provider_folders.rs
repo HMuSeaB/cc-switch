@@ -63,6 +63,49 @@ impl Database {
         self.set_setting(&Self::provider_folders_key(app_type), &value)
     }
 
+    /// 把若干供应商归入 `target` 指定的文件夹，**并把该文件夹登记进注册表**，
+    /// 全程**单事务**。
+    ///
+    /// 与 [`Self::set_providers_folder`] 的区别只在注册表：后者只改
+    /// `providers.meta`，目标名不在注册表里就会变成"孤儿分组"（界面能显示，
+    /// 但不能重命名/解散）。智能分组允许模型挑选新名字，所以必须走这个入口，
+    /// 否则用户会在界面上看到一堆管不了的文件夹。
+    ///
+    /// 同一次事务里既改注册表又改供应商，中途失败整体回滚——不会出现
+    /// "归组成功但注册表没跟上"的半成品状态。
+    ///
+    /// 返回实际被更新的供应商行数（`target` 为 None 或空时不写注册表）。
+    pub fn set_providers_folder_ensure(
+        &self,
+        app_type: &str,
+        provider_ids: &[String],
+        target: Option<&str>,
+    ) -> Result<usize, AppError> {
+        // 只在这里做一次 trim/空值归一，下面两处共用
+        let target = target.map(str::trim).filter(|s| !s.is_empty());
+
+        let mut conn = lock_conn!(self.conn);
+        let tx = conn
+            .transaction()
+            .map_err(|e| AppError::Database(e.to_string()))?;
+
+        let updated = set_providers_folder_in_tx(&tx, app_type, provider_ids, target)?;
+
+        // target = None（移到未分组）时没有文件夹要登记，跳过注册表写入。
+        // 此时 updated 可能 >0，但注册表确实无需变更。
+        if let Some(name) = target {
+            let mut folders = read_folders_in_tx(&tx, app_type);
+            if !folders.iter().any(|f| f.name == name)
+                && ensure_folder_names(&mut folders, &[name.to_string()])
+            {
+                write_folders_in_tx(&tx, app_type, &folders)?;
+            }
+        }
+
+        tx.commit().map_err(|e| AppError::Database(e.to_string()))?;
+        Ok(updated)
+    }
+
     /// 批量把若干供应商的 `folder` 改成 `target`，**单事务**。
     ///
     /// 为什么不用 N 次 `save_provider`：那是 N 次串行 IPC + N 个独立事务，
@@ -91,30 +134,7 @@ impl Database {
             .transaction()
             .map_err(|e| AppError::Database(e.to_string()))?;
 
-        let mut updated = 0usize;
-        for id in provider_ids {
-            let Some(meta_json) = read_meta_json(&tx, app_type, id)? else {
-                log::debug!("[provider_folders] 跳过不存在的供应商: id={id}, app={app_type}");
-                continue;
-            };
-
-            let mut meta: crate::provider::ProviderMeta =
-                serde_json::from_str(&meta_json).unwrap_or_default();
-
-            if meta.folder.as_deref() == target {
-                continue; // 已经在目标文件夹，跳过无意义写入
-            }
-            meta.folder = target.map(str::to_string);
-
-            let next_json = serde_json::to_string(&meta)
-                .map_err(|e| AppError::Database(format!("序列化 meta 失败: {e}")))?;
-            tx.execute(
-                "UPDATE providers SET meta = ?1 WHERE id = ?2 AND app_type = ?3",
-                params![next_json, id, app_type],
-            )
-            .map_err(|e| AppError::Database(e.to_string()))?;
-            updated += 1;
-        }
+        let updated = set_providers_folder_in_tx(&tx, app_type, provider_ids, target)?;
 
         tx.commit().map_err(|e| AppError::Database(e.to_string()))?;
         Ok(updated)
@@ -234,6 +254,46 @@ fn write_folders_in_tx(
     )
     .map_err(|e| AppError::Database(e.to_string()))?;
     Ok(())
+}
+
+/// 在事务内把 `provider_ids` 的 folder 改成 `target`（None = 移到未分组）。
+///
+/// `set_providers_folder` / `set_providers_folder_ensure` 共用的归组实现：
+/// 只改 `providers.meta.folder`，不碰 `is_current` / `in_failover_queue` /
+/// `sort_index`，也不触发 live 配置重写——分组是纯 UI 概念。
+///
+/// 返回实际被更新的行数。已经在目标文件夹的供应商会被跳过（无意义写入）。
+fn set_providers_folder_in_tx(
+    tx: &rusqlite::Transaction<'_>,
+    app_type: &str,
+    provider_ids: &[String],
+    target: Option<&str>,
+) -> Result<usize, AppError> {
+    let mut updated = 0usize;
+    for id in provider_ids {
+        let Some(meta_json) = read_meta_json(tx, app_type, id)? else {
+            log::debug!("[provider_folders] 跳过不存在的供应商: id={id}, app={app_type}");
+            continue;
+        };
+
+        let mut meta: crate::provider::ProviderMeta =
+            serde_json::from_str(&meta_json).unwrap_or_default();
+
+        if meta.folder.as_deref() == target {
+            continue; // 已经在目标文件夹，跳过无意义写入
+        }
+        meta.folder = target.map(str::to_string);
+
+        let next_json = serde_json::to_string(&meta)
+            .map_err(|e| AppError::Database(format!("序列化 meta 失败: {e}")))?;
+        tx.execute(
+            "UPDATE providers SET meta = ?1 WHERE id = ?2 AND app_type = ?3",
+            params![next_json, id, app_type],
+        )
+        .map_err(|e| AppError::Database(e.to_string()))?;
+        updated += 1;
+    }
+    Ok(updated)
 }
 
 /// 读单条供应商的 meta JSON；行不存在返回 Ok(None)。

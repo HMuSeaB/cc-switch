@@ -173,7 +173,7 @@
     "folderSelectTarget": "Select target folder",
     "smartGroup": "Smart Grouping",
     "smartGroupTitle": "Smart Grouping",
-    "smartGroupDesc": "TypeSafe (Jev) judges which folder each ungrouped provider belongs in. Suggestions are for review only and are written only after you confirm.",
+    "smartGroupDesc": "TypeSafe (Jev) picks a folder for each ungrouped provider. When no folder fits, it suggests a new one based on the provider domain. Suggestions are for review only; nothing is written until you confirm.",
     "smartGroupHint": "Click the button below to generate grouping suggestions for currently ungrouped providers.",
     "suggestGenerate": "Generate",
     "suggestGenerating": "Analyzing...",
@@ -236,7 +236,9 @@
         "apiKeyPlaceholder": "Enter Gemini API Key"
       }
     },
-    "duplicateLiveIdsLoadFailed": "Failed to read provider identifiers from config, please fix the config and try again"
+    "duplicateLiveIdsLoadFailed": "Failed to read provider identifiers from config, please fix the config and try again",
+    "suggestNewFolder": "New",
+    "suggestNewFolderHint": "This folder does not exist yet and will be created when applied"
   },
   "claudeCode": {
     "needsRouting": "Needs Routing",
